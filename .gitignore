@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+.env
+*.log
+
+# Generated output: ignore the entire directory by default.
+# The .gitkeep marker below ensures the directory still exists after clone.
+/output/*
+!/output/.gitkeep
+
+*.tmp
+*.bak
+
+# Test inputs are typically large and personal; ignore by default
+# (commit your own test PDFs explicitly if you want to version them).
+*.pdf
+!test_*.pdf
+!sample_*.pdf
+
+.idea/
+.vscode/
+*.swp
+.DS_Store

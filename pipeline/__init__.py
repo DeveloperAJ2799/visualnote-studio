@@ -1,0 +1,1 @@
+"""VisualNote pipeline modules."""
