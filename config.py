@@ -70,23 +70,29 @@ class Config:
     final_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output" / "final")
     templates_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "templates")
 
-    use_mock: bool = field(default_factory=lambda: _bool(os.getenv("MIMO_USE_MOCK"), True))
+    use_mock: bool = field(default_factory=lambda: _bool(os.getenv("MIMO_USE_MOCK"), False))
 
-    mimo_base_url: str = field(
-        default_factory=lambda: os.getenv("MIMO_BASE_URL", "https://api.mimo.mi.com/v1")
+    # --- LLM (Kilo Code AI Gateway) ---
+    kilo_base_url: str = field(
+        default_factory=lambda: os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway")
     )
-    mimo_api_key: str = field(default_factory=lambda: os.getenv("MIMO_API_KEY", ""))
-    mimo_model: str = field(default_factory=lambda: os.getenv("MIMO_MODEL", "mimo-v2.5"))
-    mimo_fallback_model: str = field(
-        default_factory=lambda: os.getenv("MIMO_FALLBACK_MODEL", "mimo-v2.5-pro")
+    kilo_api_key: str = field(default_factory=lambda: os.getenv("KILO_API_KEY", ""))
+    kilo_model: str = field(
+        default_factory=lambda: os.getenv("KILO_MODEL", "anthropic/claude-sonnet-4.5")
+    )
+    kilo_fallback_model: str = field(
+        default_factory=lambda: os.getenv("KILO_FALLBACK_MODEL", "anthropic/claude-sonnet-4")
     )
 
+    # --- TTS (Xiaomi MiMo Open Platform) ---
     tts_base_url: str = field(
-        default_factory=lambda: os.getenv("MIMO_TTS_BASE_URL", "https://api.mimo.mi.com/v1")
+        default_factory=lambda: os.getenv("MIMO_TTS_BASE_URL", "https://api.xiaomimimo.com/v1")
     )
     tts_api_key: str = field(default_factory=lambda: os.getenv("MIMO_TTS_API_KEY", ""))
     tts_model: str = field(default_factory=lambda: os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts"))
-    tts_voice: str = field(default_factory=lambda: os.getenv("MIMO_TTS_VOICE", "instructor"))
+    tts_voice: str = field(
+        default_factory=lambda: os.getenv("MIMO_TTS_VOICE", "Chloe")
+    )
 
     ffmpeg_path: str = field(default_factory=_detect_ffmpeg)
     manim_path: str = field(default_factory=_detect_manim)
@@ -97,6 +103,11 @@ class Config:
 
     coqui_tts_model: str = field(default_factory=lambda: os.getenv("COQUI_TTS_MODEL", ""))
     coqui_tts_voice: str = field(default_factory=lambda: os.getenv("COQUI_TTS_VOICE", ""))
+
+    # --- Image Generation (NVIDIA NIM Qwen-Image) ---
+    nvidia_nim_api_key: str = field(
+        default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", "")
+    )
 
     def ensure_dirs(self) -> None:
         """Create all output directories if they do not exist."""

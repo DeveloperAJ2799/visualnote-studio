@@ -14,7 +14,6 @@ import argparse
 import json
 import logging
 import sys
-import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -32,6 +31,14 @@ from pipeline.image_fetcher import render_image_overlay, render_title_card
 from pipeline.tts import synthesize_scene
 from pipeline.assembler import assemble
 
+try:
+    from hyperframes_render import render_with_hyperframes
+    _HYPERFRAMES_AVAILABLE = True
+except Exception as _hf_exc:  # pragma: no cover
+    render_with_hyperframes = None  # type: ignore
+    _HYPERFRAMES_AVAILABLE = False
+    _HYPERFRAMES_IMPORT_ERROR = _hf_exc
+
 log = logging.getLogger("visualnote")
 
 
@@ -42,16 +49,9 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*bytes wanted but 0 bytes read.*",
-        category=UserWarning,
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*Using the last valid frame instead.*",
-        category=UserWarning,
-    )
+    # Moviepy clip-extension warnings are now suppressed at import time inside
+    # `pipeline.assembler` so they apply whether the assembler is called from
+    # this CLI or imported directly by a helper script.
 
 
 def make_clients(args: argparse.Namespace) -> Tuple[MiMoClient, TTSClient]:
@@ -60,17 +60,30 @@ def make_clients(args: argparse.Namespace) -> Tuple[MiMoClient, TTSClient]:
     if use_mock:
         log.info("Client: MockClient (no API spend)")
         return MockClient(), MockClient()
-    if not CONFIG.mimo_api_key:
+    missing = []
+    if not CONFIG.kilo_api_key:
+        missing.append("KILO_API_KEY")
+    if not CONFIG.tts_api_key:
+        missing.append("MIMO_TTS_API_KEY")
+    if missing:
         log.error(
-            "MIMO_USE_MOCK is false but MIMO_API_KEY is empty. "
-            "Set it in .env or pass --mock."
+            "MIMO_USE_MOCK is false but the following env vars are empty: %s. "
+            "Set them in .env or pass --mock.",
+            ", ".join(missing),
         )
         sys.exit(2)
-    log.info("Client: HTTPClient (base=%s, model=%s)", CONFIG.mimo_base_url, CONFIG.mimo_model)
+    log.info(
+        "LLM: Kilo gateway base=%s model=%s",
+        CONFIG.kilo_base_url, CONFIG.kilo_model,
+    )
+    log.info(
+        "TTS: MiMo base=%s model=%s voice=%s",
+        CONFIG.tts_base_url, CONFIG.tts_model, CONFIG.tts_voice,
+    )
     llm = HTTPClient(
-        base_url=CONFIG.mimo_base_url,
-        api_key=CONFIG.mimo_api_key,
-        model=CONFIG.mimo_model,
+        kilo_base_url=CONFIG.kilo_base_url,
+        kilo_api_key=CONFIG.kilo_api_key,
+        kilo_model=CONFIG.kilo_model,
         tts_base_url=CONFIG.tts_base_url,
         tts_api_key=CONFIG.tts_api_key,
         tts_model=CONFIG.tts_model,
@@ -184,6 +197,30 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force-manifest", action="store_true")
+    parser.add_argument(
+        "--renderer",
+        choices=["moviepy", "hyperframes"],
+        default="moviepy",
+        help="Final-assembly renderer: moviepy (default) or hyperframes (HTML composition).",
+    )
+    parser.add_argument(
+        "--agent", action="store_true",
+        help="Hand off composition authoring to the HyperFrames agent skill "
+             "(writes BRIEF.md, invokes claude/codex/gemini). Skips the Python "
+             "manifest + TTS + render pipeline; the agent does it all.",
+    )
+    parser.add_argument(
+        "--print-brief", action="store_true",
+        help="With --agent, just write BRIEF.md and print its path (don't invoke the agent).",
+    )
+    parser.add_argument(
+        "--target-minutes", type=int, default=10,
+        help="Target video length in minutes (used by --agent).",
+    )
+    parser.add_argument(
+        "--intent", default="10-minute deep explanation",
+        help="Render intent (used by --agent).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser
 
@@ -201,12 +238,33 @@ def main(argv: Optional[list] = None) -> int:
     log.info("  voice:        %s", args.voice)
     log.info("  mock mode:    %s", bool(args.mock) or CONFIG.use_mock)
     log.info("  dry run:      %s", args.dry_run)
+    log.info("  agent mode:   %s", args.agent)
     log.info("=" * 60)
 
     input_path = Path(args.input)
     if not input_path.exists():
         log.error("Input file not found: %s", input_path)
         return 2
+
+    if args.agent:
+        from agent_render import build_brief, invoke_agent, write_brief, _detect_agent
+        project_dir = CONFIG.output_dir / "hyperframes_project"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        brief = build_brief(
+            input_path, args.intent, Path(args.output),
+            target_minutes=args.target_minutes,
+        )
+        brief_path = write_brief(brief, project_dir)
+        log.info("Wrote brief: %s", brief_path)
+        if args.print_brief:
+            print(brief_path)
+            return 0
+        agent = _detect_agent()
+        if not agent:
+            log.error("No agent CLI on PATH (claude/codex/gemini/cursor/kilo). "
+                      "Re-run with --print-brief to get the brief path.")
+            return 2
+        return invoke_agent(agent, brief_path, project_dir)
 
     llm, tts = make_clients(args)
     doc_content = step_ingest(args)
@@ -220,7 +278,19 @@ def main(argv: Optional[list] = None) -> int:
     step_synthesize(manifest, tts, args)
 
     out = Path(args.output)
-    assemble(manifest, out)
+    if args.renderer == "hyperframes":
+        if not _HYPERFRAMES_AVAILABLE:
+            log.error(
+                "HyperFrames renderer requested but import failed: %s. "
+                "Run `npx --yes hyperframes --version` to verify install.",
+                _HYPERFRAMES_IMPORT_ERROR,
+            )
+            return 3
+        log.info("Renderer: hyperframes (HTML composition)")
+        render_with_hyperframes(manifest, out)
+    else:
+        log.info("Renderer: moviepy (default)")
+        assemble(manifest, out)
 
     log.info("=" * 60)
     log.info("Done. Final video: %s", out)

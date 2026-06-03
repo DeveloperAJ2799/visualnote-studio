@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -32,6 +33,38 @@ from moviepy.editor import (
 )
 
 from config import CONFIG
+
+
+_warnings_filter_installed = False
+
+
+def _suppress_moviepy_clip_warnings() -> None:
+    """Silence the noisy moviepy ImageFileClip/VideoFileClip warnings that fire
+    when extending a clip beyond its source duration (last-frame hold path).
+
+    Lives at module import so it applies whether the assembler is invoked from
+    the main CLI or imported directly by helper scripts.
+    """
+    global _warnings_filter_installed
+    if _warnings_filter_installed:
+        return
+    try:
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*bytes wanted but 0 bytes read.*",
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*Inconsistent timestamps in the GIF.*",
+            category=UserWarning,
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
+    _warnings_filter_installed = True
+
+
+_suppress_moviepy_clip_warnings()
 
 log = logging.getLogger(__name__)
 
