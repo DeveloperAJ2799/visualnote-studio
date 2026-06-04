@@ -99,6 +99,8 @@ def _repair_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
             )
         if vt == "html_frame" and not scene.get("html_content"):
             scene["html_content"] = "callout"
+        if not scene.get("image_query"):
+            scene["image_query"] = None
     if "total_scenes" not in manifest or manifest["total_scenes"] != len(
         manifest.get("scenes", [])
     ):

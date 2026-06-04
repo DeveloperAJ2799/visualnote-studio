@@ -218,7 +218,7 @@ class HTTPClient:
             ],
             "audio": {
                 "format": "wav",
-                "voice": voice or self.tts_model,
+                "voice": voice or "Chloe",
             },
             "stream": False,
         }

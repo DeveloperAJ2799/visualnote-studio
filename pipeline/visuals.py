@@ -43,12 +43,11 @@ def render_visuals(
     scenes = manifest.get("scenes", [])
     outputs: list[Path] = []
 
-    # Try to use Qwen Image API for AI-generated visuals
-    qwen_api_key = CONFIG.nvidia_nim_api_key
-    use_qwen = bool(qwen_api_key)
-    if use_qwen:
-        from pipeline.qwen_image import generate_scene_image
-        log.info("Using Qwen Image API for AI-generated visuals")
+    # Use diagram generator for AI visuals (manim/html scenes)
+    use_diagrams = True
+    if use_diagrams:
+        from pipeline.diagram_gen import generate_scene_diagram
+        log.info("Using HTML Canvas diagram generator for visuals")
 
     for scene in scenes:
         scene_id = scene.get("scene_id", 0)
@@ -78,10 +77,10 @@ def render_visuals(
                 outputs.append(path)
 
             elif visual_type in ("html_frame", "manim_animation"):
-                # Try Qwen Image API first for AI-generated visuals
-                if use_qwen:
-                    gen_path = CONFIG.scenes_dir / f"scene_{scene_id:03d}_gen.png"
-                    result = generate_scene_image(scene, gen_path, qwen_api_key)
+                # Generate HTML Canvas diagram for these scene types
+                if use_diagrams:
+                    gen_path = CONFIG.scenes_dir / f"scene_{scene_id:03d}_diagram.png"
+                    result = generate_scene_diagram(scene, gen_path)
                     if result:
                         outputs.append(result)
                         continue

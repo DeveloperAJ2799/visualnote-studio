@@ -97,8 +97,15 @@ def _find_visual(scene: dict) -> Optional[Path]:
     scene_id = scene.get("scene_id")
     if scene_id is None:
         return None
-    for suffix in (".mp4", ".png", ".jpg", ".jpeg", ".webp"):
-        p = CONFIG.scenes_dir / f"scene_{scene_id:03d}{suffix}"
+    base = CONFIG.scenes_dir
+    candidates = [
+        base / f"scene_{scene_id:03d}{suffix}"
+        for suffix in (".mp4", ".png", ".jpg", ".jpeg", ".webp")
+    ] + [
+        base / f"scene_{scene_id:03d}_diagram{suffix}"
+        for suffix in (".png", ".jpg", ".jpeg", ".webp", ".mp4")
+    ]
+    for p in candidates:
         if p.exists():
             return p
     return None
@@ -217,29 +224,39 @@ def _build_composition_html(
         )
         has_video_bg = bool(visual and visual.suffix.lower() == ".mp4")
 
-        # Build the panel's inner content as regular (non-clip) elements.
-        # The engine only manages the outer panel-wrap visibility; the inner
-        # elements (bg-image, title, body) are always present in the DOM but
-        # hidden via the parent's data-start/duration. GSAP still animates
-        # them by id — the timeline references these exact ids.
+        # Build a 2-column layout: left = diagram, right = text (no panel).
+        # Both columns are inside the clip div. GSAP animates them by id.
         inner_parts: List[str] = []
         if has_image_bg:
             rel = _to_asset_url(visual, project_root)
-            inner_parts.append(f'<img class="bg-image" src="{rel}" />')
-        if has_video_bg:
+            inner_parts.append(
+                f'<div class="left-col">'
+                f'  <img class="bg-image" src="{rel}" />'
+                f'</div>'
+            )
+        elif has_video_bg:
             rel = _to_asset_url(visual, project_root)
             inner_parts.append(
-                f'<video class="scene-visual" src="{rel}" muted playsinline></video>'
+                f'<div class="left-col">'
+                f'  <video class="scene-visual" src="{rel}" muted playsinline></video>'
+                f'</div>'
             )
-        # The .panel card holds the visible content (accent bar, title, body,
-        # footer). bg-image and scene-visual sit behind it via z-index.
+        else:
+            # No image available — show a placeholder gradient
+            inner_parts.append(
+                f'<div class="left-col placeholder">'
+                f'  <div class="placeholder-text">{_html_escape(title_text)}</div>'
+                f'</div>'
+            )
+
+        # Right column: ONE clean text block (no frame, no accent, no footer)
         inner_parts.append(
-            '<div class="panel">'
-            '<div class="panel-accent-bar"></div>'
-            f'<h1 class="panel-title" id="title-{sid}">{title_text}</h1>'
-            f'<p class="panel-body" id="body-{sid}">{body_text}</p>'
-            '<div class="panel-footer">VisualNote \u2022 Module 2</div>'
-            '</div>'
+            f'<div class="right-col">'
+            f'  <div class="text-block">'
+            f'    <h1 class="scene-title" id="title-{sid}">{title_text}</h1>'
+            f'    <p class="scene-body" id="body-{sid}">{body_text}</p>'
+            f'  </div>'
+            f'</div>'
         )
 
         # Single clip per scene: the panel-wrap. All other per-scene content
@@ -332,73 +349,79 @@ def _build_composition_html(
     .orb-b {{ width: 600px; height: 600px; background: var(--accent4); bottom: -160px; right: -100px; filter: blur(120px); }}
     .orb-c {{ width: 420px; height: 420px; background: var(--accent2); top: 30%; right: 10%; filter: blur(120px); }}
 
+    /* 2-column layout: left = diagram, right = text. No panel frames. */
     .panel-wrap {{
       position: absolute; inset: 0;
       z-index: 2;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      padding: 0;
+    }}
+
+    .left-col {{
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 0 40px;
+    }}
+    .left-col.placeholder {{
+      background: linear-gradient(135deg, var(--bg-mid) 0%, var(--bg-light) 100%);
+    }}
+    .placeholder-text {{
+      font-family: 'Space Grotesk', 'Inter', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-align: center;
+      padding: 40px;
     }}
     .bg-image {{
-      position: absolute; inset: 0;
-      width: var(--w); height: var(--h);
-      object-fit: cover;
-      opacity: 0;
-      z-index: 0;
-      filter: brightness(0.4) saturate(1.2);
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      opacity: 1;
+      transform-origin: center;
     }}
     .scene-visual {{
-      position: absolute; inset: 0;
-      width: var(--w); height: var(--h);
-      object-fit: cover;
-      z-index: 1;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
     }}
 
-    .panel {{
+    .right-col {{
       position: relative;
-      width: min(1400px, 80%);
-      max-height: 84%;
-      padding: 60px 70px;
-      border-radius: 26px;
-      background: rgba(10, 14, 39, 0.95);
-      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7), 0 0 120px rgba(233, 69, 96, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      overflow: hidden;
+      width: 100%;
+      height: 100%;
+      padding: 80px 70px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
     }}
-    .panel-accent-bar {{
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 6px;
-      border-radius: 26px 26px 0 0;
-      background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent4));
+    .text-block {{
+      display: block;
+      width: 100%;
+      max-width: 800px;
     }}
-    .panel-title {{
-      margin: 0 0 28px 0;
+    .scene-title {{
+      margin: 0 0 20px 0;
       font-family: 'Space Grotesk', 'Inter', sans-serif;
-      font-size: 64px;
+      font-size: 48px;
       font-weight: 700;
-      line-height: 1.08;
+      line-height: 1.15;
       color: var(--text);
-      letter-spacing: -0.02em;
-      text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+      letter-spacing: -0.01em;
     }}
-    .panel-body {{
+    .scene-body {{
       margin: 0;
-      font-size: 30px;
-      line-height: 1.5;
-      color: var(--text);
-      white-space: pre-wrap;
-      text-shadow: 0 1px 10px rgba(0, 0, 0, 0.4);
-    }}
-    .panel-footer {{
-      position: absolute;
-      bottom: 24px; right: 32px;
-      font-size: 16px;
-      letter-spacing: 0.3em;
-      text-transform: uppercase;
+      font-size: 24px;
+      line-height: 1.6;
       color: var(--text-dim);
-      font-weight: 600;
+      white-space: pre-wrap;
     }}
 
     .scene-transition {{
@@ -422,31 +445,25 @@ def _build_composition_html(
     for i, (scene, start, dur) in enumerate(zip(scenes, starts, durs)):
         sid = scene.get("scene_id", i + 1)
         is_last = i == len(scenes) - 1
+        visual = _find_visual(scene)
         has_bg = bool(
-            _find_visual(scene) and
-            _find_visual(scene).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            visual and
+            visual.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
         )
 
         # Background image Ken Burns (zoom + pan)
         if has_bg:
             gsap_anim_chains.append(
                 f"  tl.fromTo('#panel-{sid} .bg-image', "
-                f"{{scale:1.1, x:'-3%'}}, "
-                f"{{scale:1.0, x:'3%', duration:{dur:.1f}, ease:'none'}}, {start:.3f});"
+                f"{{scale:1.05}}, "
+                f"{{scale:1.0, duration:{dur:.1f}, ease:'none'}}, {start:.3f});"
             )
 
-        # Panel card entrance: slide up + fade
+        # Left column entrance: slide in from left
         gsap_anim_chains.append(
-            f"  tl.fromTo('#panel-{sid} .panel', "
-            f"{{opacity:0, y:60, scale:0.96}}, "
-            f"{{opacity:1, y:0, scale:1, duration:0.7, ease:'power3.out'}}, {start:.3f});"
-        )
-
-        # Accent bar sweep across top
-        gsap_anim_chains.append(
-            f"  tl.fromTo('#panel-{sid} .panel-accent-bar', "
-            f"{{scaleX:0, transformOrigin:'left'}}, "
-            f"{{scaleX:1, duration:0.5, ease:'power2.out'}}, {start + 0.2:.3f});"
+            f"  tl.fromTo('#panel-{sid} .left-col', "
+            f"{{opacity:0, x:-60}}, "
+            f"{{opacity:1, x:0, duration:0.7, ease:'power3.out'}}, {start:.3f});"
         )
 
         # Title reveal: clip-path wipe from left
@@ -456,7 +473,7 @@ def _build_composition_html(
             f"{{opacity:1, clipPath:'inset(0 0% 0 0)', duration:0.6, ease:'power3.out'}}, {start + 0.3:.3f});"
         )
 
-        # Body text: staggered line-by-line reveal
+        # Body text: fade up
         gsap_anim_chains.append(
             f"  tl.fromTo('#body-{sid}', "
             f"{{opacity:0, y:20}}, "
@@ -467,8 +484,8 @@ def _build_composition_html(
         if not is_last:
             fade_out_at = start + dur - 0.5
             gsap_anim_chains.append(
-                f"  tl.to('#panel-{sid} .panel', "
-                f"{{opacity:0, y:-30, scale:0.98, duration:0.4, ease:'power2.in'}}, {fade_out_at:.3f});"
+                f"  tl.to('#panel-{sid} .left-col', "
+                f"{{opacity:0, x:-40, duration:0.4, ease:'power2.in'}}, {fade_out_at:.3f});"
             )
             gsap_anim_chains.append(
                 f"  tl.to('#title-{sid}', "
@@ -566,7 +583,7 @@ def _build_meta_json(project_dir: Path, doc_title: str) -> Path:
     meta = {
         "id": "visualnote-deep",
         "name": doc_title or "VisualNote Deep Dive",
-        "createdAt": _dt.datetime.utcnow().isoformat() + "Z",
+        "createdAt": _dt.datetime.now(_dt.timezone.utc).isoformat(),
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta_path
@@ -588,8 +605,7 @@ def _probe_nvenc() -> bool:
     except Exception as exc:
         log.warning("ffmpeg probe failed: %s", exc)
         return False
-    import re as _re
-    return bool(_re.search(r"^\s*V[\.\s\S]*h264_nvenc", out.stdout, re.MULTILINE))
+    return bool(re.search(r"^\s*V[\.\s\S]*h264_nvenc", out.stdout, re.MULTILINE))
 
 
 # ---------------------------------------------------------------------------

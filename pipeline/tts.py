@@ -148,11 +148,3 @@ def synthesize_scene(
         scene_id, wav_path, duration, len(wav_bytes), voice,
     )
     return wav_path, duration
-
-
-def synthesize_scenes(manifest: dict, tts_client: TTSClient, voice: Optional[str] = None) -> list[Tuple[Path, float]]:
-    """Synthesize every scene's narration. Returns list of (wav_path, duration_s)."""
-    results: list[Tuple[Path, float]] = []
-    for scene in manifest.get("scenes", []):
-        results.append(synthesize_scene(scene, tts_client, voice))
-    return results

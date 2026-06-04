@@ -51,6 +51,10 @@ python run_deep_biology.py
 
 | Flag | Default | Purpose |
 |---|---|---|
+| `--pdf <path>` | first `*.pdf` in project root | Input PDF to convert |
+| `--out <path>` | `output/final/<pdf_stem>_deep_explanation.mp4` | Output MP4 path |
+| `--target-minutes <int>` | `10` | Target video length in minutes |
+| `--voice <name>` | `Chloe` | TTS voice |
 | `--skip-llm` | false | Reuse cached manifest; skip LLM generation |
 | `--skip-tts` | false | Reuse cached audio files |
 | `--skip-visuals` | false | Skip visual rendering; reuse existing images |
@@ -59,14 +63,23 @@ python run_deep_biology.py
 ### Examples
 
 ```bash
-# Quick render with cached manifest + audio
-python run_deep_biology.py --skip-llm --skip-tts
+# Auto-discover: pick up the first *.pdf in the project root
+python run_deep_biology.py
+
+# Convert a specific PDF
+python run_deep_biology.py --pdf "Module 3 - Cells.pdf"
+
+# Custom output path
+python run_deep_biology.py --out "videos/my_lesson.mp4"
+
+# Shorter video with a different voice
+python run_deep_biology.py --target-minutes 5 --voice Aria
+
+# Quick re-render (skip everything except the final video)
+python run_deep_biology.py --skip-llm --skip-tts --skip-visuals
 
 # Regenerate all visuals with AI
 python run_deep_biology.py --skip-tts --force-visuals
-
-# Full pipeline from scratch
-python run_deep_biology.py
 ```
 
 ---
