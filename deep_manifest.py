@@ -138,11 +138,17 @@ def generate_deep_manifest(
     timeout_s: float = 600.0,
     use_council: Optional[bool] = None,
     fast: bool = False,
+    council_config: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Generate a long-form deep-dive manifest for the document.
 
     By default uses the 5-member council; pass ``use_council=False`` or set
     ``CONFIG.council_enabled=False`` to use the legacy single-LLM path.
+
+    Args:
+        council_config: Optional path to a custom ``council_config.json``
+            to use for this run. Lets you swap members, models, system
+            prompts, and phase structure without touching Python.
     """
     if use_council is None:
         use_council = CONFIG.council_enabled
@@ -152,6 +158,7 @@ def generate_deep_manifest(
             doc_content=doc_content,
             target_minutes=target_minutes,
             fast=fast,
+            council_config_path=council_config,
         )
 
     return _generate_deep_manifest_legacy(
@@ -167,6 +174,7 @@ def _generate_deep_manifest_via_council(
     doc_content: Dict[str, Any],
     target_minutes: int,
     fast: bool,
+    council_config_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Run the council with a deep-dive target_minutes."""
     from pipeline.council import run_council, save_council_cache
@@ -176,8 +184,9 @@ def _generate_deep_manifest_via_council(
     title_hint = doc_content.get("document_title", "Untitled Document")
     pdf_hash = _pdf_hash(title_hint, doc_text)
     log.info(
-        "Deep manifest via council: target_min=%d fast=%s text_len=%d",
+        "Deep manifest via council: target_min=%d fast=%s text_len=%d config=%s",
         target_minutes, fast, len(doc_text),
+        council_config_path or "<default>",
     )
     manifest, state = run_council(
         doc_text=doc_text,
@@ -185,6 +194,7 @@ def _generate_deep_manifest_via_council(
         target_minutes=target_minutes,
         pdf_hash=pdf_hash,
         fast=fast,
+        council_config_path=council_config_path,
     )
     save_council_cache(state)
     if manifest.get("dissent_summary"):

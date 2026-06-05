@@ -1,4 +1,4 @@
-"""The 3-round orchestrator: runs the council, tracks state, returns the final manifest.
+"""The phase-driven orchestrator: runs the council, tracks state, returns the final manifest.
 
 This module knows nothing about PDF ingestion, TTS, or HyperFrames. It
 takes (doc_text, doc_title_hint, target_minutes) and returns the
@@ -8,8 +8,27 @@ Two implementations:
 - ``Council``             — real, calls free models over HTTP.
 - ``MockCouncil``         — deterministic, no network, for tests/CI.
 
-Both share the same ``run() -> (manifest, state)`` signature so callers
-can swap them via ``--mock`` or in tests.
+Both share the same ``run() -> manifest`` signature so callers can swap
+them via ``--mock`` or in tests.
+
+**Phase model.** The council is structured as a list of phases declared
+in ``council_config.json``. Each phase has:
+  - a name
+  - a list of members (in execution order)
+  - ``parallel: true|false`` (whether the orchestrator can run them
+    concurrently)
+  - optional ``skippable: true`` (so ``--council-fast`` can drop it)
+
+The orchestrator walks the phases in order, and within each phase runs
+the listed members. A member's role during the run is determined by its
+``output_kind`` in the config: ``script`` (drafts the narration),
+``design`` (drafts the visuals), ``review`` (peer-reviews other
+members), ``synthesis`` (the chairman's final merge).
+
+To add a new member, edit the config. To change a member's behavior,
+edit its ``system_prompt`` in the config. To change the council's
+deliberation shape, edit ``phases`` in the config. No Python change
+needed for any of those.
 """
 from __future__ import annotations
 
@@ -21,19 +40,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import CONFIG
-from pipeline.council.config import get_fallback_chain
-from pipeline.council.llm import CouncilLLMError, CouncilCallResult, chat
+from pipeline.council.config import (
+    get_fallback_chain,
+    list_phases,
+    load_council_config,
+    validate_council_config,
+)
+from pipeline.council.llm import CouncilCallResult, CouncilLLMError, chat
 from pipeline.council.members import (
+    get_anon_label,
     get_member,
     get_members,
-    get_anon_label,
 )
-from pipeline.council.prompts import (
-    chairman_user,
-    review_user,
-    scriptwriter_user,
-    visual_designer_user,
-)
+from pipeline.council.prompts import build_user_prompt
 from pipeline.council.state import (
     CouncilState,
     Critique,
@@ -56,17 +75,29 @@ def run_council(
     target_minutes: int = 10,
     pdf_hash: str = "",
     fast: bool = False,
+    council_config_path: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], CouncilState]:
-    """Run the full 3-round council and return (final_manifest, state).
+    """Run the full phase-driven council and return (final_manifest, state).
 
     Args:
         doc_text: The full source document text.
         doc_title_hint: Hint for the document title.
         target_minutes: Target video length.
         pdf_hash: Optional cache key.
-        fast: If True, skip Round 2 reviews (3 calls instead of 9).
-              The chairman still synthesizes; reviews are empty.
+        fast: If True, skip any phase marked ``skippable: true`` in the
+              config (typically the review phase).
+        council_config_path: Optional override path to a different
+              ``council_config.json``. Lets you swap the entire council
+              (members, models, system prompts, phases) for this one run.
     """
+    if council_config_path is not None:
+        cfg = load_council_config(Path(council_config_path))
+    else:
+        cfg = load_council_config()
+    validation_errors = validate_council_config(cfg)
+    if validation_errors:
+        log.error("Council config has errors: %s", validation_errors)
+
     state = CouncilState(
         pdf_hash=pdf_hash,
         doc_text=doc_text,
@@ -74,7 +105,7 @@ def run_council(
         target_minutes=target_minutes,
     )
     council = Council()
-    manifest = council.run(state, fast=fast)
+    manifest = council.run(state, fast=fast, cfg=cfg)
     return manifest, state
 
 
@@ -84,257 +115,192 @@ def run_council(
 
 
 class Council:
-    """Runs the 3-round deliberation against real LLM endpoints."""
+    """Runs the phase-driven deliberation against real LLM endpoints."""
 
-    def run(self, state: CouncilState, *, fast: bool = False) -> Dict[str, Any]:
+    def run(
+        self,
+        state: CouncilState,
+        *,
+        fast: bool = False,
+        cfg: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cfg = cfg or load_council_config()
+        phases = list_phases(cfg)
+
+        if fast:
+            phases = [p for p in phases if not p.get("skippable", False)]
+            log.info("Council: fast mode, %d phases (skippable dropped)", len(phases))
+
         log.info(
-            "Council starting: doc_title=%r target_min=%d fast=%s",
-            state.doc_title_hint, state.target_minutes, fast,
+            "Council starting: doc_title=%r target_min=%d fast=%s phases=%d",
+            state.doc_title_hint,
+            state.target_minutes,
+            fast,
+            len(phases),
         )
-        round_start = time.perf_counter()
+        run_start = time.perf_counter()
 
-        # ---- Round 1: parallel generation ----
-        log.info("Council round 1/3: 2 parallel creator calls")
-        self._round1(state)
-        log.info(
-            "Council round 1 done in %.1fs (calls=%d, total elapsed=%.1fs)",
-            time.perf_counter() - round_start, state.total_calls, state.total_elapsed_s,
-        )
+        for phase_idx, phase in enumerate(phases, 1):
+            self._run_phase(state, phase, phase_idx, len(phases), cfg)
 
-        # ---- Round 2: parallel reviews (skipped in fast mode) ----
-        if not fast:
-            log.info("Council round 2/3: 4 parallel peer-review calls")
-            self._round2(state)
-            log.info(
-                "Council round 2 done in %.1fs (calls=%d, total elapsed=%.1fs)",
-                time.perf_counter() - round_start, state.total_calls, state.total_elapsed_s,
-            )
-        else:
-            log.info("Council round 2/3: skipped (--council-fast)")
-
-        # ---- Round 3: chairman synthesis ----
-        log.info("Council round 3/3: chairman synthesis")
-        self._round3(state)
         log.info(
             "Council complete: %d LLM calls in %.1fs total",
-            state.total_calls, state.total_elapsed_s,
+            state.total_calls,
+            time.perf_counter() - run_start,
         )
 
         if state.chairman_output is None:
-            raise RuntimeError("Council: chairman produced no output")
+            log.error("Council: no chairman output; synthesizing fallback manifest")
+            state.chairman_output = _fallback_manifest(state)
         return state.chairman_output
 
-    # ----- Round 1: 2 creators in parallel -----
+    # ----- Phase runner -----
 
-    def _round1(self, state: CouncilState) -> None:
-        scriptwriter = get_member("scriptwriter")
-        visual_designer = get_member("visual_designer")
+    def _run_phase(
+        self,
+        state: CouncilState,
+        phase: Dict[str, Any],
+        phase_idx: int,
+        total_phases: int,
+        cfg: Dict[str, Any],
+    ) -> None:
+        name = phase.get("name", f"phase{phase_idx}")
+        description = phase.get("description", "")
+        member_names = phase.get("members", []) or []
+        parallel = bool(phase.get("parallel", True))
 
-        sw_messages = [
-            {"role": "system", "content": scriptwriter.system_prompt},
-            {
-                "role": "user",
-                "content": scriptwriter_user(
-                    state.doc_text, state.doc_title_hint, state.target_minutes
-                ),
-            },
-        ]
-        # Visual designer will need the scriptwriter output, so we run
-        # them sequentially. The scriptwriter is faster (StepFun), so the
-        # sequential overhead is minimal vs. the model latency.
-        sw_record = self._call_member(scriptwriter, 1, "creator", sw_messages)
-        state.scriptwriter_output = sw_record.parsed
+        if not member_names:
+            log.warning("Phase %d/%d [%s] has no members, skipping", phase_idx, total_phases, name)
+            return
 
-        if state.scriptwriter_output is None:
-            log.error("Scriptwriter returned no parseable JSON; using empty stub")
-            state.scriptwriter_output = {
-                "document_title": state.doc_title_hint,
-                "total_scenes": 0,
-                "scenes": [],
-            }
+        members = [get_member(n, cfg) for n in member_names]
+        log.info(
+            "Phase %d/%d [%s] (%s): %d members, parallel=%s — %s",
+            phase_idx,
+            total_phases,
+            name,
+            ", ".join(m.name for m in members),
+            len(members),
+            parallel,
+            description,
+        )
 
-        vd_messages = [
-            {"role": "system", "content": visual_designer.system_prompt},
-            {
-                "role": "user",
-                "content": visual_designer_user(
-                    state.doc_text,
-                    state.doc_title_hint,
-                    state.scriptwriter_output,
-                ),
-            },
-        ]
-        vd_record = self._call_member(visual_designer, 1, "creator", vd_messages)
-        state.visual_designer_output = vd_record.parsed
+        if parallel and len(members) > 1:
+            self._run_members_parallel(state, members, phase_idx)
+        else:
+            for m in members:
+                try:
+                    self._do_member(state, m, phase_idx, cfg)
+                except Exception as exc:
+                    log.error("Phase [%s]: %s raised %s", name, m.name, exc)
 
-        if state.visual_designer_output is None:
-            log.error("Visual Designer returned no parseable JSON; using empty stub")
-            state.visual_designer_output = {"scene_designs": []}
-
-    # ----- Round 2: 4 reviewers in parallel -----
-
-    def _round2(self, state: CouncilState) -> None:
-        # Build the 4 review tasks
-        scriptwriter = get_member("scriptwriter")
-        visual_designer = get_member("visual_designer")
-        fact_checker = get_member("fact_checker")
-        pedagogy_reviewer = get_member("pedagogy_reviewer")
-
-        # Anonymize the round-1 outputs
-        anon_script = {
-            "anon_label": get_anon_label("scriptwriter"),
-            "output": state.scriptwriter_output or {},
-        }
-        anon_design = {
-            "anon_label": get_anon_label("visual_designer"),
-            "output": state.visual_designer_output or {},
-        }
-
-        tasks = [
-            (
-                scriptwriter,
-                [anon_design],  # scriptwriter reviews the designer's output
-                "creator",
-            ),
-            (
-                visual_designer,
-                [anon_script],  # designer reviews the scriptwriter's output
-                "creator",
-            ),
-            (
-                fact_checker,
-                [anon_script, anon_design],
-                "reviewer",
-            ),
-            (
-                pedagogy_reviewer,
-                [anon_script, anon_design],
-                "reviewer",
-            ),
-        ]
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
+    def _run_members_parallel(
+        self,
+        state: CouncilState,
+        members: List[Any],
+        phase_idx: int,
+    ) -> None:
+        with ThreadPoolExecutor(max_workers=len(members)) as pool:
             futures = {
-                pool.submit(self._do_review, member, targets, state): member
-                for member, targets, _ in tasks
+                pool.submit(self._do_member_safe, state, m, phase_idx): m
+                for m in members
             }
             for future in as_completed(futures):
                 member = futures[future]
                 try:
-                    review = future.result()
-                    state.reviews.append(review)
+                    future.result()
                 except Exception as exc:
-                    log.error("Reviewer %s failed: %s", member.name, exc)
-                    # Record a stub review so the chairman can still see
-                    # the member tried.
-                    state.reviews.append(
-                        Review(
-                            member=member.name,
-                            target_outputs=[t["anon_label"] for t in ([anon_script, anon_design] if member.name in ("fact_checker", "pedagogy_reviewer") else [anon_design if member.name == "scriptwriter" else anon_script])],
-                            overall_assessment=f"Review failed: {exc}",
-                        )
-                    )
+                    log.error("Phase: %s failed: %s", member.name, exc)
 
-    def _do_review(
+    def _do_member_safe(self, state: CouncilState, member: Any, phase_idx: int) -> None:
+        """Wrapper for ThreadPoolExecutor that swallows exceptions."""
+        try:
+            self._do_member(state, member, phase_idx, None)
+        except Exception as exc:
+            log.error("Council %s raised %s", member.name, exc)
+
+    # ----- Single-member execution -----
+
+    def _do_member(
         self,
-        member,
-        targets: List[Dict[str, Any]],
         state: CouncilState,
-    ) -> Review:
+        member: Any,
+        phase_idx: int,
+        cfg: Optional[Dict[str, Any]],
+    ) -> MemberCallRecord:
+        """Build the user prompt, call the LLM, and stash the parsed output.
+
+        What we do with the parsed output depends on ``output_kind``:
+          - ``review``     → wrap in a Review dataclass and append to
+                             ``state.reviews``.
+          - ``synthesis``  → mirror into ``state.chairman_output`` and
+                             store under ``member.name`` in
+                             ``state.member_outputs``.
+          - everything else (script, design, …) → store under
+                             ``member.name`` in ``state.member_outputs``.
+        """
+        # Build anonymized targets for reviewers
+        targets: Optional[List[Dict[str, Any]]] = None
+        if member.output_kind == "review":
+            targets = [
+                {
+                    "anon_label": get_anon_label(target_name),
+                    "output": state.member_outputs.get(target_name, {}),
+                }
+                for target_name in member.reviews
+            ]
+
+        user_prompt = build_user_prompt(member, state, targets=targets)
         messages = [
             {"role": "system", "content": member.system_prompt},
-            {
-                "role": "user",
-                "content": review_user(member.name, targets, state.doc_text),
-            },
+            {"role": "user", "content": user_prompt},
         ]
-        record = self._call_member(member, 2, "reviewer", messages)
-        parsed = record.parsed
-        critiques: List[Critique] = []
-        overall = ""
-        if isinstance(parsed, dict):
-            for c in parsed.get("reviews", []) or []:
-                try:
-                    critiques.append(
-                        Critique(
-                            target_member=str(c.get("target_member", "")),
-                            scene_id=int(c.get("scene_id", 0) or 0),
-                            verdict=str(c.get("verdict", "concern")).lower(),
-                            issues=list(c.get("issues", []) or []),
-                            suggested_fix=str(c.get("suggested_fix", "")),
-                        )
-                    )
-                except Exception as exc:
-                    log.warning("Bad critique from %s: %s", member.name, exc)
-            overall = str(parsed.get("overall_assessment", ""))
-        return Review(
-            member=member.name,
-            target_outputs=[t.get("anon_label", "?") for t in targets],
-            critiques=critiques,
-            overall_assessment=overall,
-            elapsed_s=record.elapsed_s,
+
+        record = self._call_member(
+            member, phase_idx, member.role or member.output_kind, messages
         )
+        state.records.append(record)
 
-    # ----- Round 3: chairman synthesis -----
+        if record.parsed is None:
+            log.error(
+                "Council %s: no parsed output (text=%dB, error=%s)",
+                member.name,
+                len(record.text or ""),
+                record.error or "JSON parse failed",
+            )
+            return record
 
-    def _round3(self, state: CouncilState) -> None:
-        chairman = get_member("chairman")
-        reviews_for_chairman = [
-            {
-                "member": r.member,
-                "target_outputs": r.target_outputs,
-                "critiques": [
-                    {
-                        "target_member": c.target_member,
-                        "scene_id": c.scene_id,
-                        "verdict": c.verdict,
-                        "issues": c.issues,
-                        "suggested_fix": c.suggested_fix,
-                    }
-                    for c in r.critiques
-                ],
-                "overall_assessment": r.overall_assessment,
-            }
-            for r in state.reviews
-        ]
-        messages = [
-            {"role": "system", "content": chairman.system_prompt},
-            {
-                "role": "user",
-                "content": chairman_user(
-                    state.doc_text,
-                    state.doc_title_hint,
-                    state.target_minutes,
-                    state.scriptwriter_output or {},
-                    state.visual_designer_output or {},
-                    reviews_for_chairman,
-                ),
-            },
-        ]
-        record = self._call_member(chairman, 3, "chairman", messages)
-        state.chairman_output = record.parsed
-        if state.chairman_output is None:
-            # Last-ditch: synthesize a minimal manifest from the scriptwriter output
-            log.error("Chairman produced no JSON; synthesizing fallback manifest")
-            state.chairman_output = _fallback_manifest(state)
+        state.member_outputs[member.name] = record.parsed
+
+        if member.output_kind == "review":
+            review = _parsed_to_review(member, targets or [], record)
+            state.reviews.append(review)
+
+        if member.is_chairman or member.output_kind == "synthesis":
+            state.chairman_output = record.parsed
+
+        return record
 
     # ----- LLM call helper -----
 
     def _call_member(
         self,
-        member,
-        round_num: int,
+        member: Any,
+        phase_idx: int,
         role: str,
         messages: List[Dict[str, str]],
     ) -> MemberCallRecord:
         log.info(
-            "Council call: %s (%s) round=%d model=%s",
-            member.name, member.role_label, round_num, member.model,
+            "Council call: %s (%s) phase=%d model=%s",
+            member.name,
+            member.role_label,
+            phase_idx,
+            member.model,
         )
         record = MemberCallRecord(
             member=member.name,
             model=member.model,
-            round=round_num,
+            round=phase_idx,
             role=role,
         )
         try:
@@ -352,7 +318,6 @@ class Council:
             record.model = result.model
             record.elapsed_s = result.elapsed_s
             record.fallback_used = result.fallback_used
-            # `chat` with json_mode=True returns JSON-stringified parsed output
             try:
                 record.parsed = json.loads(result.text)
             except json.JSONDecodeError as exc:
@@ -377,19 +342,26 @@ class MockCouncil:
     ``confidence=0.5`` and every scene is marked ``low_confidence: true``.
     """
 
-    def run(self, state: CouncilState, *, fast: bool = False) -> Dict[str, Any]:
+    def run(
+        self,
+        state: CouncilState,
+        *,
+        fast: bool = False,
+        cfg: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cfg = cfg or load_council_config()
         log.info("MockCouncil starting (no network calls)")
 
-        # Mock scriptwriter: split doc_text into roughly equal narration chunks
+        # Generate a scriptwriter stub from doc_text
         scenes = _mock_split_scenes(state.doc_text, state.target_minutes)
-        state.scriptwriter_output = {
+        state.member_outputs["scriptwriter"] = {
             "document_title": state.doc_title_hint,
             "total_scenes": len(scenes),
             "scenes": scenes,
         }
 
-        # Mock visual designer: pick a varied frame_style per scene
-        state.visual_designer_output = {
+        # Generate a visual-designer stub
+        state.member_outputs["visual_designer"] = {
             "scene_designs": [
                 {
                     "scene_id": s["scene_id"],
@@ -403,49 +375,81 @@ class MockCouncil:
             ]
         }
 
-        # Mock reviews: every scene gets a "concern" (mock mode = uncertain)
+        # Skip review phase in fast mode
         if not fast:
-            state.reviews = [
-                Review(
-                    member="fact_checker",
-                    target_outputs=["Member A", "Member B"],
-                    critiques=[
-                        Critique(
-                            target_member="Member A",
-                            scene_id=s["scene_id"],
-                            verdict="concern",
-                            issues=["[mock] unverified by design"],
+            # Find the review phase in the config to know which members to mock
+            review_phase = next(
+                (p for p in list_phases(cfg) if p.get("name") == "review"),
+                None,
+            )
+            if review_phase:
+                for member_name in review_phase.get("members", []):
+                    m = get_member(member_name, cfg)
+                    if m.output_kind != "review":
+                        continue
+                    state.reviews.append(
+                        Review(
+                            member=m.name,
+                            target_outputs=[get_anon_label(t) for t in m.reviews],
+                            critiques=[
+                                Critique(
+                                    target_member=get_anon_label("scriptwriter"),
+                                    scene_id=s["scene_id"],
+                                    verdict="concern",
+                                    issues=["[mock] unverified by design"],
+                                )
+                                for s in scenes
+                            ],
+                            overall_assessment=f"[mock] {m.name} auto-concern",
                         )
-                        for s in scenes
-                    ],
-                    overall_assessment="[mock] all claims unverified",
-                ),
-                Review(
-                    member="pedagogy_reviewer",
-                    target_outputs=["Member A", "Member B"],
-                    critiques=[
-                        Critique(
-                            target_member="Member A",
-                            scene_id=s["scene_id"],
-                            verdict="approve",
-                            issues=[],
-                        )
-                        for s in scenes
-                    ],
-                    overall_assessment="[mock] pacing acceptable",
-                ),
-            ]
+                    )
 
-        # Mock chairman: merge and mark all low_confidence
+        # Chairman merges everything
         state.chairman_output = _build_merged_manifest(
-            state, low_confidence_all=True, confidence=0.5,
+            state, low_confidence_all=True, confidence=0.5
         )
+        state.member_outputs["chairman"] = state.chairman_output
         log.info("MockCouncil done: %d scenes", len(scenes))
         return state.chairman_output
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Review-parsing helper (used by both real and mock councils)
+# ---------------------------------------------------------------------------
+
+
+def _parsed_to_review(
+    member: Any,
+    targets: List[Dict[str, Any]],
+    record: MemberCallRecord,
+) -> Review:
+    """Convert a parsed reviewer output into a typed ``Review``."""
+    parsed = record.parsed if isinstance(record.parsed, dict) else {}
+    critiques: List[Critique] = []
+    for c in parsed.get("reviews", []) or []:
+        try:
+            critiques.append(
+                Critique(
+                    target_member=str(c.get("target_member", "")),
+                    scene_id=int(c.get("scene_id", 0) or 0),
+                    verdict=str(c.get("verdict", "concern")).lower(),
+                    issues=list(c.get("issues", []) or []),
+                    suggested_fix=str(c.get("suggested_fix", "")),
+                )
+            )
+        except Exception as exc:
+            log.warning("Bad critique from %s: %s", member.name, exc)
+    return Review(
+        member=member.name,
+        target_outputs=[t.get("anon_label", "?") for t in targets],
+        critiques=critiques,
+        overall_assessment=str(parsed.get("overall_assessment", "")),
+        elapsed_s=record.elapsed_s,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers (mock + fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -473,10 +477,8 @@ def _mock_split_scenes(doc_text: str, target_minutes: int) -> List[Dict[str, Any
     if not paragraphs:
         paragraphs = [doc_text[:500]] if doc_text else ["[mock] empty document"]
     if len(paragraphs) <= target_scenes:
-        # Reuse paragraphs to reach the count
         while len(paragraphs) < target_scenes:
             paragraphs.append(paragraphs[len(paragraphs) % len(paragraphs)])
-    # Group paragraphs into scenes (~equal number of paragraphs per scene)
     per_scene = max(1, len(paragraphs) // target_scenes)
     scenes: List[Dict[str, Any]] = []
     for i in range(target_scenes):
@@ -490,23 +492,23 @@ def _mock_split_scenes(doc_text: str, target_minutes: int) -> List[Dict[str, Any
         )
         narration = chunk[:600] if chunk else "[mock] placeholder narration."
         word_count = max(1, len(narration.split()))
-        scenes.append({
-            "scene_id": i + 1,
-            "title": title,
-            "narration": narration,
-            "duration_hint_s": max(20, int(word_count / 2.3)),
-            "visual_type": "title_card",
-            "manim_prompt": None,
-            "image_query": None,
-            "html_content": None,
-        })
+        scenes.append(
+            {
+                "scene_id": i + 1,
+                "title": title,
+                "narration": narration,
+                "duration_hint_s": max(20, int(word_count / 2.3)),
+                "visual_type": "title_card",
+                "manim_prompt": None,
+                "image_query": None,
+                "html_content": None,
+            }
+        )
     return scenes
 
 
 def _fallback_manifest(state: CouncilState) -> Dict[str, Any]:
     """Last-ditch manifest when even the chairman fails."""
-    sw = state.scriptwriter_output or {}
-    scenes = sw.get("scenes", [])
     return _build_merged_manifest(state, low_confidence_all=True, confidence=0.3)
 
 
@@ -517,8 +519,8 @@ def _build_merged_manifest(
     confidence: float,
 ) -> Dict[str, Any]:
     """Merge scriptwriter + visual_designer into the chairman's output shape."""
-    sw = state.scriptwriter_output or {}
-    vd = state.visual_designer_output or {}
+    sw = state.member_outputs.get("scriptwriter", {}) or {}
+    vd = state.member_outputs.get("visual_designer", {}) or {}
     designs_by_id = {
         d.get("scene_id"): d for d in vd.get("scene_designs", []) or []
     }
@@ -529,7 +531,6 @@ def _build_merged_manifest(
         sid = s.get("scene_id")
         d = designs_by_id.get(sid, {})
         frame_style = d.get("frame_style", "text_only")
-        # Map frame_style to legacy visual_type for downstream compatibility
         vt = _frame_to_visual_type(frame_style)
         merged = {
             "scene_id": sid,
@@ -580,7 +581,7 @@ def _cache_path(pdf_hash: str, suffix: str) -> Path:
 
 
 def save_council_cache(state: CouncilState) -> None:
-    """Persist the final manifest + per-round outputs for caching."""
+    """Persist the final manifest + per-member outputs for caching."""
     if not state.pdf_hash:
         return
     if state.chairman_output is not None:
@@ -588,14 +589,11 @@ def save_council_cache(state: CouncilState) -> None:
             json.dumps(state.chairman_output, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    if state.scriptwriter_output is not None:
-        _cache_path(state.pdf_hash, "round1_script").write_text(
-            json.dumps(state.scriptwriter_output, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    if state.visual_designer_output is not None:
-        _cache_path(state.pdf_hash, "round1_design").write_text(
-            json.dumps(state.visual_designer_output, ensure_ascii=False, indent=2),
+    for member_name, output in state.member_outputs.items():
+        if output is None:
+            continue
+        _cache_path(state.pdf_hash, f"member_{member_name}").write_text(
+            json.dumps(output, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 

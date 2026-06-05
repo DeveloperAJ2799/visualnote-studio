@@ -85,6 +85,11 @@ def main() -> int:
     parser.add_argument("--council-fast", action="store_true",
                         help="Council with Round 2 reviews skipped (3 calls, "
                              "faster but lower quality).")
+    parser.add_argument("--council-config", type=Path, default=None,
+                        help="Path to a custom council_config.json. Defaults to "
+                             "pipeline/council/council_config.json. Lets you swap "
+                             "the entire council (members, models, system prompts, "
+                             "phases) without touching Python.")
     args = parser.parse_args()
 
     # Resolve PDF (CLI override -> default discovery)
@@ -149,6 +154,8 @@ def main() -> int:
             log.info("Council: fast mode (Round 2 reviews skipped)")
         else:
             log.info("Council: full 5-member deliberation")
+        if args.council_config:
+            log.info("Council config override: %s", args.council_config)
         manifest = generate_deep_manifest(
             doc_content,
             client,
@@ -156,6 +163,7 @@ def main() -> int:
             max_attempts=3,
             use_council=not args.no_council,
             fast=args.council_fast,
+            council_config=args.council_config,
         )
         save_manifest(manifest)
 

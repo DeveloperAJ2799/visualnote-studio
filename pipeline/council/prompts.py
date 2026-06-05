@@ -1,13 +1,95 @@
 """Round-specific prompt templates for the council.
 
-These are the actual prompts sent to each member in each round. The system
-prompt for each member is in ``members.py``; this module builds the
-per-call user prompt and (for Round 2) the anonymized "Member X" framing.
+System prompts live in ``council_config.json`` (under each member's
+``system_prompt`` field) so they can be tuned without touching code.
+
+This module builds the **user** prompt (the runtime data each member
+needs to do its job) and dispatches to the right builder based on the
+member's ``output_kind``. The orchestrator calls ``build_user_prompt``
+and never has to know which role any specific member plays.
 """
 from __future__ import annotations
 
 from textwrap import dedent
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .members import Member
+    from .state import CouncilState, Review
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher
+# ---------------------------------------------------------------------------
+
+
+def build_user_prompt(
+    member: "Member",
+    state: "CouncilState",
+    *,
+    targets: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Build the user prompt for `member` based on its ``output_kind``.
+
+    Args:
+        member: The council member being called.
+        state: The full council state (doc text, prior outputs, etc.).
+        targets: Only used for review members. A list of
+            ``{"anon_label": "Member A", "output": {...}}`` dicts.
+
+    Returns:
+        The user-prompt string to send alongside the member's system prompt.
+    """
+    kind = member.output_kind
+    if kind == "script":
+        return scriptwriter_user(
+            state.doc_text, state.doc_title_hint, state.target_minutes
+        )
+    if kind == "design":
+        return visual_designer_user(
+            state.doc_text,
+            state.doc_title_hint,
+            state.member_outputs.get("scriptwriter", {}),
+        )
+    if kind == "review":
+        return review_user(member.name, targets or [], state.doc_text)
+    if kind == "synthesis":
+        return chairman_user(
+            state.doc_text,
+            state.doc_title_hint,
+            state.target_minutes,
+            state.member_outputs.get("scriptwriter", {}),
+            state.member_outputs.get("visual_designer", {}),
+            _serialize_reviews_for_chairman(state.reviews),
+        )
+    raise ValueError(
+        f"Unknown output_kind for member {member.name!r}: {kind!r}. "
+        "Valid kinds: script, design, review, synthesis."
+    )
+
+
+def _serialize_reviews_for_chairman(reviews: List["Review"]) -> List[Dict[str, Any]]:
+    """Turn state.reviews into the plain-dict shape chairman_user expects."""
+    out: List[Dict[str, Any]] = []
+    for r in reviews:
+        out.append(
+            {
+                "member": r.member,
+                "target_outputs": r.target_outputs,
+                "critiques": [
+                    {
+                        "target_member": c.target_member,
+                        "scene_id": c.scene_id,
+                        "verdict": c.verdict,
+                        "issues": c.issues,
+                        "suggested_fix": c.suggested_fix,
+                    }
+                    for c in r.critiques
+                ],
+                "overall_assessment": r.overall_assessment,
+            }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +102,7 @@ def scriptwriter_user(
     doc_title_hint: str,
     target_minutes: int = 10,
 ) -> str:
-    """Round 1 prompt for the Scriptwriter."""
+    """Round 1 prompt for the Scriptwriter (output_kind: 'script')."""
     target_scenes = max(15, target_minutes * 2)
     target_words = target_minutes * 140
     return dedent(
@@ -74,7 +156,7 @@ def visual_designer_user(
     doc_title_hint: str,
     scriptwriter_output: Dict[str, Any],
 ) -> str:
-    """Round 1 prompt for the Visual Designer (sees the script)."""
+    """Round 1 prompt for the Visual Designer (output_kind: 'design')."""
     scenes_summary = _scenes_brief(scriptwriter_output)
     return dedent(
         f"""

@@ -1,5 +1,7 @@
 {
-  "_comment": "Council model and behavior configuration. Edit this file to change which free model speaks for each role. Env vars (COUNCIL_*_MODEL, COUNCIL_ENABLED, COUNCIL_MAX_RETRIES, COUNCIL_CONFIDENCE_THRESHOLD) override these defaults at runtime.",
+  "_comment_phases": "The orchestrator runs phases IN ORDER. Within a phase, members run IN PARALLEL. A 'phases' list (vs the legacy 'rounds') is the source of truth: add/remove phases to change the council's deliberation shape.",
+  "_comment_members": "Each member has: model, temperature, system_prompt, output_kind, role, label. 'output_kind' is one of: 'script' (drafts text), 'design' (drafts visuals), 'review' (reviews others), 'synthesis' (final merge). 'role' is freeform (used for the chairman's identity). 'system_prompt' is the member's full system prompt — edit to change the member's behavior. No hardcoded prompts in Python.",
+  "_comment_models": "Use ANY model name supported by the Kilo Code AI Gateway. Env vars (COUNCIL_<MEMBER>_MODEL, COUNCIL_ENABLED, COUNCIL_MAX_RETRIES, COUNCIL_CONFIDENCE_THRESHOLD) override these defaults at runtime.",
   "enabled": true,
   "max_retries": 3,
   "confidence_threshold": 0.6,
@@ -7,36 +9,78 @@
     "kilo-auto/free",
     "openrouter/free"
   ],
+  "phases": [
+    {
+      "name": "draft",
+      "description": "Phase 1: creators draft the script, then the visual designer. Sequential because the designer's prompt needs the script in hand.",
+      "parallel": false,
+      "members": ["scriptwriter", "visual_designer"]
+    },
+    {
+      "name": "review",
+      "description": "Phase 2: each reviewer evaluates the members listed under their 'reviews' field. Skippable in --council-fast mode.",
+      "parallel": true,
+      "skippable": true,
+      "members": ["scriptwriter", "visual_designer", "fact_checker", "pedagogy_reviewer"]
+    },
+    {
+      "name": "synthesis",
+      "description": "Round 3: the chairman merges all outputs into the final manifest.",
+      "parallel": false,
+      "members": ["chairman"]
+    }
+  ],
   "members": {
     "scriptwriter": {
       "label": "Member A",
       "model": "stepfun/step-3.7-flash:free",
       "temperature": 0.4,
-      "description": "Drafts narration + scene titles + durations."
+      "output_kind": "script",
+      "role": "creator",
+      "description": "Drafts narration + scene titles + durations.",
+      "system_prompt": "You are an expert video scriptwriter and curriculum designer. You convert study documents into structured video scripts. You focus on the WORDS: scene titles, narration text, and timing. You do NOT pick visuals, frame styles, or animations — that is another member's job. You output ONLY valid JSON — no markdown fences, no preamble, no explanation.",
+      "reviews": ["visual_designer"]
     },
     "visual_designer": {
       "label": "Member B",
       "model": "openrouter/owl-alpha",
       "temperature": 0.5,
-      "description": "Picks frame_style, diagram, animations per scene."
+      "output_kind": "design",
+      "role": "creator",
+      "description": "Picks frame_style, diagram, animations per scene.",
+      "system_prompt": "You are a motion-graphics designer and front-end developer. You focus on the LOOK: for each scene, you pick a frame style, an optional diagram primitive, animation primitives, and highlight words. You do NOT write narration — that is another member's job. You output ONLY valid JSON — no markdown fences, no preamble, no explanation.",
+      "reviews": ["scriptwriter"]
     },
     "fact_checker": {
       "label": "Member C",
       "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
       "temperature": 0.2,
-      "description": "Verifies narration claims against the source PDF."
+      "output_kind": "review",
+      "role": "reviewer",
+      "description": "Verifies narration claims against the source PDF.",
+      "system_prompt": "You are a research librarian. Your only job is to verify that every factual claim in the narration is supported by the source document. For each claim, either cite the source paragraph or flag it as 'unverified'. Be ruthless — false confidence is worse than false doubt. You output ONLY valid JSON.",
+      "reviews": ["scriptwriter", "visual_designer"]
     },
     "pedagogy_reviewer": {
       "label": "Member D",
       "model": "stepfun/step-3.7-flash:free",
       "temperature": 0.3,
-      "description": "Reviews pacing, clarity, and learning flow."
+      "output_kind": "review",
+      "role": "reviewer",
+      "description": "Reviews pacing, clarity, and learning flow.",
+      "system_prompt": "You are an instructional designer. You review the script for clarity, pacing (60-120 words per scene), self-containment of each scene, jargon level (define terms on first use), and learning flow (does each scene build on the previous?). You output ONLY valid JSON.",
+      "reviews": ["scriptwriter", "visual_designer"]
     },
     "chairman": {
       "label": "Chairman",
       "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
       "temperature": 0.3,
-      "description": "Synthesizes all outputs into the final manifest."
+      "output_kind": "synthesis",
+      "role": "chairman",
+      "is_chairman": true,
+      "description": "Synthesizes all outputs into the final manifest.",
+      "system_prompt": "You are the editor-in-chief. You read the scriptwriter's draft, the visual designer's brief, and the reviews from the fact-checker and pedagogy reviewer. You produce the FINAL manifest: scenes with merged script + design + a confidence score per scene + a plain-English dissent summary. You may overrule reviewers, but you must record every override. You output ONLY valid JSON.",
+      "reviews": []
     }
   }
 }

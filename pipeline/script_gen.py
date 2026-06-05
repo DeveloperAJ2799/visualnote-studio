@@ -148,6 +148,7 @@ def generate_manifest(
     use_council: Optional[bool] = None,
     target_minutes: int = 10,
     fast: bool = False,
+    council_config: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Run scene manifest generation. By default uses the 5-member council.
 
@@ -160,6 +161,9 @@ def generate_manifest(
             force on/off.
         target_minutes: Used by the council to size the manifest.
         fast: If True, the council skips Round 2 (faster but lower quality).
+        council_config: Optional path to a custom ``council_config.json``
+            to use for this run. Lets you swap members, models, system
+            prompts, and phase structure without touching Python.
 
     Raises:
         RuntimeError: If validation still fails after repair + retry.
@@ -176,6 +180,7 @@ def generate_manifest(
             title_hint=title_hint,
             target_minutes=target_minutes,
             fast=fast,
+            council_config_path=council_config,
         )
     else:
         manifest = _generate_manifest_legacy(
@@ -214,11 +219,15 @@ def _generate_manifest_via_council(
     title_hint: str,
     target_minutes: int,
     fast: bool,
+    council_config_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Run the 5-member council. Falls back to legacy on hard failure."""
     from pipeline.council import run_council, save_council_cache
 
-    log.info("Generating manifest via council (target_min=%d, fast=%s)", target_minutes, fast)
+    log.info(
+        "Generating manifest via council (target_min=%d, fast=%s, config=%s)",
+        target_minutes, fast, council_config_path or "<default>",
+    )
     try:
         manifest, state = run_council(
             doc_text=doc_text,
@@ -226,8 +235,9 @@ def _generate_manifest_via_council(
             target_minutes=target_minutes,
             pdf_hash=_pdf_hash(title_hint, doc_text),
             fast=fast,
+            council_config_path=council_config_path,
         )
-        # Cache the final manifest + per-round outputs
+        # Cache the final manifest + per-member outputs
         save_council_cache(state)
         # Log dissent
         if manifest.get("dissent_summary"):

@@ -3,6 +3,10 @@
 These are the typed containers that move between rounds. Every council call
 returns a ``MemberCallRecord``; the orchestrator collects them into
 ``CouncilState`` and the chairman reads from it.
+
+All member outputs are stored in ``CouncilState.member_outputs`` keyed by
+member name. The chairman's final manifest is also mirrored on
+``chairman_output`` for convenience.
 """
 from __future__ import annotations
 
@@ -51,26 +55,46 @@ class Review:
 
 @dataclass
 class CouncilState:
-    """The full state of one council run."""
+    """The full state of one council run.
+
+    All member outputs are stored in ``member_outputs`` keyed by member
+    name. The chairman's final manifest is mirrored on ``chairman_output``
+    for callers that don't want to dig into ``member_outputs``.
+    """
 
     pdf_hash: str
     doc_text: str
     doc_title_hint: str
     target_minutes: int = 10
 
-    # Round 1
-    scriptwriter_output: Optional[Dict[str, Any]] = None
-    visual_designer_output: Optional[Dict[str, Any]] = None
+    # Generic storage: every member's parsed output is stored here,
+    # keyed by member name (e.g. "scriptwriter", "visual_designer",
+    # "fact_checker", "pedagogy_reviewer", "chairman").
+    member_outputs: Dict[str, Any] = field(default_factory=dict)
 
-    # Round 2
+    # Reviews collected in the review phase (only members with
+    # output_kind == "review" produce entries here).
     reviews: List[Review] = field(default_factory=list)
 
-    # Round 3
+    # Chairman's final merged manifest, mirrored from member_outputs["chairman"]
+    # for convenience.
     chairman_output: Optional[Dict[str, Any]] = None
 
     # Telemetry
     records: List[MemberCallRecord] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
+
+    # ------------------------------------------------------------------
+    # Convenience accessors (read-only views into member_outputs)
+    # ------------------------------------------------------------------
+
+    @property
+    def scriptwriter_output(self) -> Optional[Dict[str, Any]]:
+        return self.member_outputs.get("scriptwriter")
+
+    @property
+    def visual_designer_output(self) -> Optional[Dict[str, Any]]:
+        return self.member_outputs.get("visual_designer")
 
     @property
     def total_calls(self) -> int:
