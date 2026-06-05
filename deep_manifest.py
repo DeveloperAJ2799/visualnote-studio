@@ -136,8 +136,70 @@ def generate_deep_manifest(
     target_minutes: int = 10,
     max_attempts: int = 2,
     timeout_s: float = 600.0,
+    use_council: Optional[bool] = None,
+    fast: bool = False,
 ) -> Dict[str, Any]:
-    """Generate a long-form deep-dive manifest for the document."""
+    """Generate a long-form deep-dive manifest for the document.
+
+    By default uses the 5-member council; pass ``use_council=False`` or set
+    ``CONFIG.council_enabled=False`` to use the legacy single-LLM path.
+    """
+    if use_council is None:
+        use_council = CONFIG.council_enabled
+
+    if use_council:
+        return _generate_deep_manifest_via_council(
+            doc_content=doc_content,
+            target_minutes=target_minutes,
+            fast=fast,
+        )
+
+    return _generate_deep_manifest_legacy(
+        doc_content=doc_content,
+        client=client,
+        target_minutes=target_minutes,
+        max_attempts=max_attempts,
+    )
+
+
+def _generate_deep_manifest_via_council(
+    *,
+    doc_content: Dict[str, Any],
+    target_minutes: int,
+    fast: bool,
+) -> Dict[str, Any]:
+    """Run the council with a deep-dive target_minutes."""
+    from pipeline.council import run_council, save_council_cache
+    from pipeline.script_gen import _pdf_hash
+
+    doc_text = _build_doc_text(doc_content)
+    title_hint = doc_content.get("document_title", "Untitled Document")
+    pdf_hash = _pdf_hash(title_hint, doc_text)
+    log.info(
+        "Deep manifest via council: target_min=%d fast=%s text_len=%d",
+        target_minutes, fast, len(doc_text),
+    )
+    manifest, state = run_council(
+        doc_text=doc_text,
+        doc_title_hint=title_hint,
+        target_minutes=target_minutes,
+        pdf_hash=pdf_hash,
+        fast=fast,
+    )
+    save_council_cache(state)
+    if manifest.get("dissent_summary"):
+        log.info("Council dissent: %s", manifest["dissent_summary"])
+    return manifest
+
+
+def _generate_deep_manifest_legacy(
+    *,
+    doc_content: Dict[str, Any],
+    client: MiMoClient,
+    target_minutes: int,
+    max_attempts: int,
+) -> Dict[str, Any]:
+    """Legacy single-LLM deep-manifest path (no council)."""
     doc_text = _build_doc_text(doc_content)
     title_hint = doc_content.get("document_title", "Untitled Document")
     target_scenes = max(15, target_minutes * 2)
@@ -147,14 +209,14 @@ def generate_deep_manifest(
     system_prompt = DEEP_SYSTEM
     user_prompt = _deep_user(doc_text, title_hint, target_minutes)
     log.info(
-        "Deep manifest prompt: %d system chars, %d user chars",
+        "Deep manifest prompt (legacy): %d system chars, %d user chars",
         len(system_prompt),
         len(user_prompt),
     )
 
     for attempt in range(1, max_attempts + 1):
         log.info(
-            "Deep manifest attempt %d: target %d scenes for %d min",
+            "Deep manifest attempt %d (legacy): target %d scenes for %d min",
             attempt, target_scenes, target_minutes,
         )
         if hasattr(client, "_post_chat_kilo"):
@@ -222,12 +284,12 @@ def generate_deep_manifest(
         log.warning("Attempt %d: validation issues: %s", attempt, last_err[:3])
 
     if manifest is None:
-        raise RuntimeError("Deep manifest: no response from LLM")
+        raise RuntimeError("Deep manifest (legacy): no response from LLM")
 
     manifest = _repair_manifest(manifest)
     errs = _validate_manifest(manifest)
     if errs:
         raise RuntimeError(
-            f"Deep manifest still invalid after {max_attempts} attempts: {errs[:5]}"
+            f"Deep manifest (legacy) still invalid after {max_attempts} attempts: {errs[:5]}"
         )
     return manifest

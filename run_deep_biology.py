@@ -80,6 +80,11 @@ def main() -> int:
                         help="Skip visual rendering; reuse existing scene images.")
     parser.add_argument("--force-visuals", action="store_true",
                         help="Re-render all scene visuals even if PNGs exist.")
+    parser.add_argument("--no-council", action="store_true",
+                        help="Skip the 5-member council; use single-LLM legacy path.")
+    parser.add_argument("--council-fast", action="store_true",
+                        help="Council with Round 2 reviews skipped (3 calls, "
+                             "faster but lower quality).")
     args = parser.parse_args()
 
     # Resolve PDF (CLI override -> default discovery)
@@ -138,11 +143,19 @@ def main() -> int:
 
     if not args.skip_llm:
         log.info("Step 3: generating %d-min deep-dive manifest", args.target_minutes)
+        if args.no_council:
+            log.info("Council: disabled (--no-council); using single-LLM path")
+        elif args.council_fast:
+            log.info("Council: fast mode (Round 2 reviews skipped)")
+        else:
+            log.info("Council: full 5-member deliberation")
         manifest = generate_deep_manifest(
             doc_content,
             client,
             target_minutes=args.target_minutes,
             max_attempts=3,
+            use_council=not args.no_council,
+            fast=args.council_fast,
         )
         save_manifest(manifest)
 

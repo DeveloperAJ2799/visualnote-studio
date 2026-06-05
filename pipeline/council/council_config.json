@@ -1,0 +1,42 @@
+{
+  "_comment": "Council model and behavior configuration. Edit this file to change which free model speaks for each role. Env vars (COUNCIL_*_MODEL, COUNCIL_ENABLED, COUNCIL_MAX_RETRIES, COUNCIL_CONFIDENCE_THRESHOLD) override these defaults at runtime.",
+  "enabled": true,
+  "max_retries": 3,
+  "confidence_threshold": 0.6,
+  "fallback_chain": [
+    "kilo-auto/free",
+    "openrouter/free"
+  ],
+  "members": {
+    "scriptwriter": {
+      "label": "Member A",
+      "model": "stepfun/step-3.7-flash:free",
+      "temperature": 0.4,
+      "description": "Drafts narration + scene titles + durations."
+    },
+    "visual_designer": {
+      "label": "Member B",
+      "model": "openrouter/owl-alpha",
+      "temperature": 0.5,
+      "description": "Picks frame_style, diagram, animations per scene."
+    },
+    "fact_checker": {
+      "label": "Member C",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "temperature": 0.2,
+      "description": "Verifies narration claims against the source PDF."
+    },
+    "pedagogy_reviewer": {
+      "label": "Member D",
+      "model": "stepfun/step-3.7-flash:free",
+      "temperature": 0.3,
+      "description": "Reviews pacing, clarity, and learning flow."
+    },
+    "chairman": {
+      "label": "Chairman",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "temperature": 0.3,
+      "description": "Synthesizes all outputs into the final manifest."
+    }
+  }
+}

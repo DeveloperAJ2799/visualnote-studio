@@ -49,6 +49,25 @@ def _detect_manim() -> str:
     return "manim"
 
 
+# Council config helpers: read defaults from pipeline/council/council_config.json
+# so model names live in a config file, not in code. Env vars (COUNCIL_*)
+# still override these at runtime.
+def _council_default(key: str, fallback):
+    try:
+        from pipeline.council.config import load_council_config
+        return load_council_config().get(key, fallback)
+    except Exception:
+        return fallback
+
+
+def _council_member_default(member: str, key: str, fallback):
+    try:
+        from pipeline.council.config import get_member_config
+        return get_member_config(member).get(key, fallback)
+    except Exception:
+        return fallback
+
+
 @dataclass(frozen=True)
 class Config:
     """Runtime configuration for VisualNote.
@@ -107,6 +126,58 @@ class Config:
     # --- Image Generation (NVIDIA NIM Qwen-Image) ---
     nvidia_nim_api_key: str = field(
         default_factory=lambda: os.getenv("NVIDIA_NIM_API_KEY", "")
+    )
+
+    # --- Council (5-member deliberation; free models only) ---
+    # Defaults come from pipeline/council/council_config.json.
+    # Env vars (COUNCIL_*_MODEL, COUNCIL_ENABLED, etc.) override at runtime.
+    council_enabled: bool = field(
+        default_factory=lambda: _bool(
+            os.getenv("COUNCIL_ENABLED"),
+            _council_default("enabled", True),
+        )
+    )
+    council_max_retries: int = field(
+        default_factory=lambda: int(
+            os.getenv("COUNCIL_MAX_RETRIES")
+            or str(_council_default("max_retries", 3))
+        )
+    )
+    council_confidence_threshold: float = field(
+        default_factory=lambda: float(
+            os.getenv("COUNCIL_CONFIDENCE_THRESHOLD")
+            or str(_council_default("confidence_threshold", 0.6))
+        )
+    )
+    council_scriptwriter_model: str = field(
+        default_factory=lambda: os.getenv(
+            "COUNCIL_SCRIPTWRITER_MODEL",
+            _council_member_default("scriptwriter", "model", ""),
+        )
+    )
+    council_visual_designer_model: str = field(
+        default_factory=lambda: os.getenv(
+            "COUNCIL_VISUAL_DESIGNER_MODEL",
+            _council_member_default("visual_designer", "model", ""),
+        )
+    )
+    council_fact_checker_model: str = field(
+        default_factory=lambda: os.getenv(
+            "COUNCIL_FACT_CHECKER_MODEL",
+            _council_member_default("fact_checker", "model", ""),
+        )
+    )
+    council_pedagogy_reviewer_model: str = field(
+        default_factory=lambda: os.getenv(
+            "COUNCIL_PEDAGOGY_REVIEWER_MODEL",
+            _council_member_default("pedagogy_reviewer", "model", ""),
+        )
+    )
+    council_chairman_model: str = field(
+        default_factory=lambda: os.getenv(
+            "COUNCIL_CHAIRMAN_MODEL",
+            _council_member_default("chairman", "model", ""),
+        )
     )
 
     def ensure_dirs(self) -> None:

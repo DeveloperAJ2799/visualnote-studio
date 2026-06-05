@@ -1,12 +1,12 @@
 """Scene manifest generation.
 
-Sends the full document text to a MiMoClient, validates the returned JSON
-against the PRD §8 schema, and saves the result to `output/scene_manifest.json`.
+By default, uses the 5-member council (Scriptwriter, Visual Designer,
+Fact-Checker, Pedagogy Reviewer, Chairman) to produce the manifest. When
+``--no-council`` is set (or CONFIG.council_enabled is False), falls back
+to the legacy single-LLM call against the supplied ``MiMoClient``.
 
-A small in-place repair pass is applied if the LLM returns shapes that are
-close-but-not-exact (e.g. `visual_type: mixed` for scenes that should clearly
-be `manim_animation`). For more serious malformedness, a single retry is
-attempted.
+Either way, the output is validated against the PRD §8 schema, repaired
+if possible, and saved to `output/scene_manifest.json`.
 """
 from __future__ import annotations
 
@@ -26,6 +26,17 @@ ALLOWED_VISUAL_TYPES = {
     "image_overlay",
     "title_card",
     "mixed",
+}
+
+# Council-produced scenes carry extra fields the renderer can use.
+COUNCIL_SCENE_EXTRA_KEYS = {
+    "frame_style",
+    "diagram",
+    "animations",
+    "highlights",
+    "confidence",
+    "low_confidence",
+    "chairman_override",
 }
 
 REQUIRED_SCENE_KEYS = {
@@ -133,32 +144,55 @@ def generate_manifest(
     doc_content: Dict[str, Any],
     client: MiMoClient,
     max_scenes: Optional[int] = None,
+    *,
+    use_council: Optional[bool] = None,
+    target_minutes: int = 10,
+    fast: bool = False,
 ) -> Dict[str, Any]:
-    """Run scene manifest generation. Repairs and validates the response.
+    """Run scene manifest generation. By default uses the 5-member council.
 
-    Raises RuntimeError if validation still fails after repair + one retry.
+    Args:
+        doc_content: Parsed PDF content.
+        client: A MiMoClient. Used only when the council is disabled or
+            falls back to the legacy path.
+        max_scenes: Optional cap on the number of scenes.
+        use_council: If None, read CONFIG.council_enabled. If True/False,
+            force on/off.
+        target_minutes: Used by the council to size the manifest.
+        fast: If True, the council skips Round 2 (faster but lower quality).
+
+    Raises:
+        RuntimeError: If validation still fails after repair + retry.
     """
+    if use_council is None:
+        use_council = CONFIG.council_enabled
+
     doc_text = _build_doc_text(doc_content)
     title_hint = doc_content.get("document_title", "Untitled Document")
 
-    log.info("Generating scene manifest (text length=%d)", len(doc_text))
-    manifest = client.generate_scene_manifest(doc_text, title_hint)
+    if use_council:
+        manifest = _generate_manifest_via_council(
+            doc_text=doc_text,
+            title_hint=title_hint,
+            target_minutes=target_minutes,
+            fast=fast,
+        )
+    else:
+        manifest = _generate_manifest_legacy(
+            doc_text=doc_text,
+            title_hint=title_hint,
+            client=client,
+        )
 
+    # Validate + repair the final manifest (council or legacy)
     errors = _validate_manifest(manifest)
     if errors:
         log.warning("Manifest validation issues; attempting repair: %s", errors[:3])
         manifest = _repair_manifest(manifest)
         errors = _validate_manifest(manifest)
     if errors:
-        log.warning("Manifest still invalid after repair; retrying once")
-        # Caller can implement a retry by passing a different client; here we
-        # simply re-issue the call once and accept whatever we get.
-        manifest = client.generate_scene_manifest(doc_text, title_hint)
-        manifest = _repair_manifest(manifest)
-        errors = _validate_manifest(manifest)
-    if errors:
         raise RuntimeError(
-            "Scene manifest failed validation after repair + retry: "
+            "Scene manifest failed validation after repair: "
             + "; ".join(errors)
         )
 
@@ -172,6 +206,73 @@ def generate_manifest(
         sorted({s["visual_type"] for s in manifest["scenes"]}),
     )
     return manifest
+
+
+def _generate_manifest_via_council(
+    *,
+    doc_text: str,
+    title_hint: str,
+    target_minutes: int,
+    fast: bool,
+) -> Dict[str, Any]:
+    """Run the 5-member council. Falls back to legacy on hard failure."""
+    from pipeline.council import run_council, save_council_cache
+
+    log.info("Generating manifest via council (target_min=%d, fast=%s)", target_minutes, fast)
+    try:
+        manifest, state = run_council(
+            doc_text=doc_text,
+            doc_title_hint=title_hint,
+            target_minutes=target_minutes,
+            pdf_hash=_pdf_hash(title_hint, doc_text),
+            fast=fast,
+        )
+        # Cache the final manifest + per-round outputs
+        save_council_cache(state)
+        # Log dissent
+        if manifest.get("dissent_summary"):
+            log.info("Council dissent: %s", manifest["dissent_summary"])
+        return manifest
+    except Exception as exc:
+        log.error("Council failed (%s); cannot fall back without a client", exc)
+        raise
+
+
+def _generate_manifest_legacy(
+    *,
+    doc_text: str,
+    title_hint: str,
+    client: MiMoClient,
+) -> Dict[str, Any]:
+    """Legacy single-LLM path. Used when --no-council is set."""
+    log.info("Generating scene manifest (legacy single-LLM, text length=%d)", len(doc_text))
+    manifest = client.generate_scene_manifest(doc_text, title_hint)
+    errors = _validate_manifest(manifest)
+    if errors:
+        log.warning("Legacy manifest validation issues; attempting repair: %s", errors[:3])
+        manifest = _repair_manifest(manifest)
+        errors = _validate_manifest(manifest)
+    if errors:
+        log.warning("Legacy manifest still invalid after repair; retrying once")
+        manifest = client.generate_scene_manifest(doc_text, title_hint)
+        manifest = _repair_manifest(manifest)
+        errors = _validate_manifest(manifest)
+    if errors:
+        raise RuntimeError(
+            "Legacy scene manifest failed validation after repair + retry: "
+            + "; ".join(errors)
+        )
+    return manifest
+
+
+def _pdf_hash(title_hint: str, doc_text: str) -> str:
+    """Stable cache key for a document."""
+    import hashlib
+    h = hashlib.sha256()
+    h.update((title_hint or "").encode("utf-8"))
+    h.update(b"\0")
+    h.update(doc_text.encode("utf-8"))
+    return h.hexdigest()[:16]
 
 
 def save_manifest(manifest: Dict[str, Any], out_path: Optional[Path] = None) -> Path:
