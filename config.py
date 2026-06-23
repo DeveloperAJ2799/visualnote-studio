@@ -91,16 +91,16 @@ class Config:
 
     use_mock: bool = field(default_factory=lambda: _bool(os.getenv("MIMO_USE_MOCK"), False))
 
-    # --- LLM (Kilo Code AI Gateway) ---
+    # --- LLM (Kilo Code AI Gateway, free tier) ---
     kilo_base_url: str = field(
         default_factory=lambda: os.getenv("KILO_BASE_URL", "https://api.kilo.ai/api/gateway")
     )
     kilo_api_key: str = field(default_factory=lambda: os.getenv("KILO_API_KEY", ""))
     kilo_model: str = field(
-        default_factory=lambda: os.getenv("KILO_MODEL", "anthropic/claude-sonnet-4.5")
+        default_factory=lambda: os.getenv("KILO_MODEL", "kilo-auto/free")
     )
     kilo_fallback_model: str = field(
-        default_factory=lambda: os.getenv("KILO_FALLBACK_MODEL", "anthropic/claude-sonnet-4")
+        default_factory=lambda: os.getenv("KILO_FALLBACK_MODEL", "stepfun/step-3.7-flash:free")
     )
 
     # --- TTS (Xiaomi MiMo Open Platform) ---

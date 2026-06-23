@@ -1,11 +1,29 @@
+# VisualNote Studio — unified requirements
+# Install: pip install -r requirements.txt
+
+# Core PDF/image processing
 pymupdf>=1.24.0
 python-pptx>=0.6.23
 python-docx>=1.1.0
-manim>=0.18.0
-playwright>=1.44.0
-moviepy>=1.0.3
 Pillow>=10.0.0
+
+# Video rendering
+# Note: manim requires system libs (libcairo2-dev, libpango1.0-dev, libgirepository1.0-dev)
+# Install with: sudo apt-get install -y libcairo2-dev libpango1.0-dev libgirepository1.0-dev gir1.2-gstreamer-1.0
+# then: pip install manim
+moviepy>=1.0.3
+imageio-ffmpeg>=0.5.0
+
+# AI pipeline
 httpx>=0.27.0
 python-dotenv>=1.0.0
+
+# Cloud Run / FastAPI (pipeline service)
+fastapi>=0.110.0
+uvicorn>=0.29.0
+supabase>=2.0.0
+pydantic>=2.0.0
+
+# Progress & browser automation
 tqdm>=4.66.0
-imageio-ffmpeg>=0.5.0
+playwright>=1.44.0
