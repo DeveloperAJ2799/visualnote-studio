@@ -31,25 +31,26 @@ _PAUSE_TAG_RE = re.compile(r"\[pause\]", re.IGNORECASE)
 
 
 def _probe_wav_duration(wav_path: Path) -> float:
-    """Return the duration in seconds, using ffprobe if available else stdlib wave."""
+    """Return the duration in seconds, using ffmpeg if available else stdlib wave."""
     try:
         out = subprocess.run(
             [
                 CONFIG.ffmpeg_path,
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                str(wav_path),
+                "-i", str(wav_path),
+                "-f", "null",
+                "-",
             ],
             capture_output=True,
             text=True,
             timeout=15,
         )
-        if out.returncode == 0 and out.stdout.strip():
-            data = json.loads(out.stdout)
-            return float(data["format"]["duration"])
+        # ffmpeg prints duration info to stderr; parse "Duration: HH:MM:SS.xx"
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", out.stderr)
+        if match:
+            h, m, s = float(match.group(1)), float(match.group(2)), float(match.group(3))
+            return h * 3600 + m * 60 + s
     except Exception as exc:
-        log.debug("ffprobe failed: %s", exc)
+        log.debug("ffmpeg duration probe failed: %s", exc)
     try:
         with wave.open(str(wav_path), "rb") as wf:
             frames = wf.getnframes()

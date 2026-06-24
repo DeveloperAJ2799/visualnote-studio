@@ -26,8 +26,8 @@ log = logging.getLogger(__name__)
 # Cheap/fast models we fall back to if a primary free model 5xx's or 429's.
 # Order matters: first available wins.
 _FALLBACK_CHAIN = [
-    "kilo-auto/free",
     "openrouter/free",
+    "kilo-auto/free",
 ]
 
 
@@ -64,7 +64,7 @@ def chat(
     Args:
         base_url: e.g. ``https://api.kilo.ai/api/gateway``.
         api_key: Bearer token.
-        model: Primary model id (e.g. ``stepfun/step-3.7-flash:free``).
+        model: Primary model id (e.g. ``openrouter/free``).
         messages: OpenAI-style ``[{"role": ..., "content": ...}, ...]``.
         json_mode: If True, request ``response_format={"type":"json_object"}``
             and parse the response as JSON.

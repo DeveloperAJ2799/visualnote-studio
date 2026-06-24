@@ -37,6 +37,6 @@ class MiMoClient(Protocol):
 class TTSClient(Protocol):
     """TTS client surface used by the pipeline."""
 
-    def synthesize(self, text: str, voice: str = "instructor") -> bytes:
+    def synthesize(self, text: str, voice: str = "Chloe") -> bytes:
         """Synthesize speech and return WAV bytes."""
         ...

@@ -27,7 +27,7 @@ from pipeline.clients.base import MiMoClient
 
 log = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_S = 120
+DEFAULT_TIMEOUT_S = 60
 DEFAULT_MAX_ATTEMPTS = 3
 
 

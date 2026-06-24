@@ -6,6 +6,7 @@ educational diagrams using styled HTML rendered via Playwright.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,7 @@ def generate_scene_diagram(
     *,
     width: int = 1920,
     height: int = 1080,
+    browser=None,
 ) -> Optional[Path]:
     """Generate an educational diagram for a scene using HTML Canvas.
 
@@ -28,6 +30,7 @@ def generate_scene_diagram(
         out_path: Where to save the generated PNG.
         width: Output image width.
         height: Output image height.
+        browser: Optional Playwright browser instance to reuse.
 
     Returns:
         Path to saved image, or None on failure.
@@ -45,19 +48,27 @@ def generate_scene_diagram(
     html = _build_diagram_html(title, narration, visual_type, width, height)
 
     # Try Playwright first, fall back to Pillow
+    _owned_browser = False
+    _pw = None
     try:
         from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(viewport={"width": width, "height": height})
-            page.set_content(html, wait_until="networkidle")
-            page.wait_for_timeout(500)
-            page.screenshot(path=str(out_path), full_page=False)
-            browser.close()
+        if browser is None:
+            _pw = sync_playwright().start()
+            browser = _pw.chromium.launch(headless=True)
+            _owned_browser = True
+        page = browser.new_page(viewport={"width": width, "height": height})
+        page.set_content(html, wait_until="networkidle")
+        page.screenshot(path=str(out_path), full_page=False)
+        page.close()
         log.info("Scene %d: diagram rendered via Playwright to %s", scene_id, out_path)
         return out_path
     except Exception as exc:
         log.warning("Scene %d: Playwright failed (%s), trying Pillow", scene_id, exc)
+    finally:
+        if _owned_browser:
+            browser.close()
+            if _pw:
+                _pw.stop()
 
     # Pillow fallback
     try:
@@ -76,7 +87,7 @@ def _build_diagram_html(
     width: int,
     height: int,
 ) -> str:
-    """Build styled HTML for a biology diagram."""
+    """Build styled HTML for an educational diagram."""
     # Color themes based on visual type
     themes = {
         "manim_animation": {"primary": "#e94560", "secondary": "#4fc3f7", "bg": "#0a0e27"},
@@ -184,8 +195,8 @@ def _build_diagram_html(
 
 def _extract_keywords(text: str) -> list[str]:
     """Extract meaningful keywords from narration text."""
-    # Common biology terms to highlight
-    bio_terms = [
+    # Common educational terms to highlight
+    edu_terms = [
         "cell", "nucleus", "membrane", "protein", "DNA", "RNA",
         "mitochondria", "ribosome", "enzyme", "ATP", "glucose",
         "phospholipid", "bilayer", "organelle", "cytoplasm",
@@ -201,7 +212,7 @@ def _extract_keywords(text: str) -> list[str]:
 
     words = text.lower().split()
     found = []
-    for term in bio_terms:
+    for term in edu_terms:
         if term.lower() in text.lower() and term not in found:
             found.append(term.capitalize())
             if len(found) >= 6:
@@ -266,7 +277,6 @@ def _render_diagram_pillow(
     # Draw concept nodes around the center
     keywords = _extract_keywords(narration)
     for i, kw in enumerate(keywords[:6]):
-        import math
         angle = math.radians(i * 60 - 90)
         nx = cx + int(220 * math.cos(angle))
         ny = cy + int(220 * math.sin(angle))

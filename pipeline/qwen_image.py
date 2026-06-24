@@ -20,11 +20,11 @@ log = logging.getLogger(__name__)
 NIM_ENDPOINT = "https://integrate.api.nvidia.com/v1/models/qwen/qwen-image/generations"
 NIM_API_KEY = os.environ.get("NVIDIA_NIM_API_KEY", "")
 
-# Scene-specific prompt templates for biology education
+# Scene-specific prompt templates for educational content
 SCENE_PROMPTS = {
-    "cell_structure": (
+    "structure": (
         "Educational scientific diagram of {topic}, labeled parts, "
-        "clean white background, professional biology textbook style, "
+        "clean white background, professional textbook style, "
         "high detail, accurate scientific illustration"
     ),
     "molecular": (
@@ -33,9 +33,9 @@ SCENE_PROMPTS = {
         "educational poster style, clear labels"
     ),
     "process": (
-        "Step-by-step biological process diagram of {topic}, "
+        "Step-by-step process diagram of {topic}, "
         "arrows showing flow, numbered stages, educational infographic, "
-        "clean design, biology textbook illustration"
+        "clean design, textbook illustration"
     ),
     "comparison": (
         "Side-by-side comparison diagram of {topic}, "
@@ -43,7 +43,7 @@ SCENE_PROMPTS = {
         "clear visual distinction"
     ),
     "default": (
-        "Educational biology illustration of {topic}, "
+        "Educational illustration of {topic}, "
         "scientific diagram, labeled parts, professional quality, "
         "textbook style, clear and informative"
     ),
@@ -83,7 +83,7 @@ def generate_scene_image(
         log.info("Scene %d: image already exists, skipping", scene.get("scene_id", 0))
         return out_path
 
-    topic = scene.get("title", "biology concept")
+    topic = scene.get("title", "concept")
     visual_type = scene.get("visual_type", "default")
     narration = scene.get("narration", "")[:200]
 

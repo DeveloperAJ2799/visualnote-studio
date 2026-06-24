@@ -37,17 +37,22 @@ def render_visuals(
         client: Optional LLM client for html_frame and manim_animation.
                 When None, those types fall back to Qwen Image or title cards.
         force: When True, re-render even if output files exist.
+
+    Returns:
+        Exactly one path per scene. Every scene always appends exactly one
+        entry to the output list — even the final Pillow fallback is
+        guaranteed to produce a file.
     """
     from pipeline.image_fetcher import render_image_overlay, render_title_card
 
     scenes = manifest.get("scenes", [])
     outputs: list[Path] = []
 
-    # Use diagram generator for AI visuals (manim/html scenes)
+    # The HTML Canvas diagram generator is the preferred fast path for
+    # html_frame / manim_animation scenes (no LLM needed).  Enabled by
+    # default; the generator degrades gracefully to Pillow on failure.
     use_diagrams = True
-    if use_diagrams:
-        from pipeline.diagram_gen import generate_scene_diagram
-        log.info("Using HTML Canvas diagram generator for visuals")
+    log.info("Using HTML Canvas diagram generator for visuals")
 
     for scene in scenes:
         scene_id = scene.get("scene_id", 0)
@@ -67,56 +72,102 @@ def render_visuals(
             outputs.append(out_mp4)
             continue
 
+        # Track the rendered path so we always append exactly one entry.
+        rendered: Optional[Path] = None
+
         try:
             if visual_type == "image_overlay":
-                path = render_image_overlay(scene, doc_content)
-                outputs.append(path)
+                rendered = render_image_overlay(scene, doc_content)
 
             elif visual_type == "title_card":
-                path = render_title_card(scene)
-                outputs.append(path)
+                rendered = render_title_card(scene)
 
             elif visual_type in ("html_frame", "manim_animation"):
-                # Generate HTML Canvas diagram for these scene types
-                if use_diagrams:
-                    gen_path = CONFIG.scenes_dir / f"scene_{scene_id:03d}_diagram.png"
-                    result = generate_scene_diagram(scene, gen_path)
-                    if result:
-                        outputs.append(result)
-                        continue
-
-                # Fall back to LLM-based renderers if client available
-                if client is not None:
-                    if visual_type == "html_frame":
-                        from pipeline.html_gen import render_html_frame
-                        path = render_html_frame(scene, client)
-                        outputs.append(path)
-                    elif visual_type == "manim_animation":
-                        from pipeline.manim_gen import render_manim_scene
-                        path = render_manim_scene(scene, client)
-                        outputs.append(path)
-                else:
-                    # Final fallback: title card
-                    log.info("Scene %d: %s without LLM/Qwen, using title card",
-                             scene_id, visual_type)
-                    path = render_title_card(scene)
-                    outputs.append(path)
+                rendered = _render_complex_scene(
+                    scene, scene_id, visual_type, client,
+                    use_diagrams=use_diagrams,
+                )
 
             else:
-                # Fallback: title card
                 log.info("Scene %d: unknown type '%s', using title card",
                          scene_id, visual_type)
-                path = render_title_card(scene)
-                outputs.append(path)
+                rendered = render_title_card(scene)
 
         except Exception as exc:
             log.warning("Scene %d visual render failed (%s); using title card",
                         scene_id, exc)
+
+        # Last-resort: if nothing was produced, force a title card.
+        if rendered is None:
             try:
-                path = render_title_card(scene)
-                outputs.append(path)
+                rendered = render_title_card(scene)
             except Exception as exc2:
-                log.error("Scene %d: title card fallback also failed: %s",
-                          scene_id, exc2)
+                # Absolute final fallback: create a 1x1 placeholder so the
+                # scene index is never missing from the assembly.
+                log.error(
+                    "Scene %d: title card fallback also failed (%s); "
+                    "writing placeholder",
+                    scene_id, exc2,
+                )
+                _write_placeholder(out_path)
+                rendered = out_path
+
+        outputs.append(rendered)
 
     return outputs
+
+
+def _render_complex_scene(
+    scene: dict,
+    scene_id: int,
+    visual_type: str,
+    client: Optional[Any],
+    *,
+    use_diagrams: bool,
+) -> Optional[Path]:
+    """Render an html_frame or manim_animation scene.
+
+    Tries (in order):
+      1. HTML Canvas diagram generator (if enabled)
+      2. LLM-based renderer (Playwright or Manim)
+      3. Pillow title card
+    """
+    from pipeline.image_fetcher import render_title_card
+
+    # Try the diagram generator first (fast, no LLM needed) — but only
+    # when the scene does NOT carry usable html_content.  The chairman
+    # (or scriptwriter) may have generated HTML that is more faithful to
+    # the narration than a generic concept-map would be.
+    has_html = (
+        isinstance(scene.get("html_content"), str)
+        and len(scene["html_content"].strip()) > 40
+    )
+    if use_diagrams and not has_html:
+        from pipeline.diagram_gen import generate_scene_diagram
+        gen_path = CONFIG.scenes_dir / f"scene_{scene_id:03d}_diagram.png"
+        result = generate_scene_diagram(scene, gen_path)
+        if result is not None:
+            return result
+
+    # Try LLM-based renderer if available.
+    if client is not None:
+        if visual_type == "html_frame":
+            from pipeline.html_gen import render_html_frame
+            return render_html_frame(scene, client)
+        elif visual_type == "manim_animation":
+            from pipeline.manim_gen import render_manim_scene
+            return render_manim_scene(scene, client)
+
+    # Final fallback: title card.
+    log.info(
+        "Scene %d: %s without LLM/diagram, using title card",
+        scene_id, visual_type,
+    )
+    return render_title_card(scene)
+
+
+def _write_placeholder(path: Path) -> None:
+    """Write a minimal 1x1 PNG so the scene index is never missing."""
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1, 1), "#000000").save(path, "PNG")

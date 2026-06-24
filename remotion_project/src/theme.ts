@@ -1,0 +1,15 @@
+export const theme = {
+  bg: "#1a1a2e",
+  bgLight: "#16213e",
+  accent: "#4fc3f7",
+  accentAlt: "#81d4fa",
+  text: "#f0f0f0",
+  textMuted: "#b0bec5",
+  yellow: "#fdd835",
+  green: "#66bb6a",
+  red: "#ef5350",
+  fontFamily: "system-ui, -apple-system, sans-serif",
+  padding: 80,
+  width: 1920,
+  height: 1080,
+} as const;

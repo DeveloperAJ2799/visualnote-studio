@@ -1,30 +1,30 @@
 """Run the VisualNote deep-dive pipeline on any PDF, rendering the final
-video via HyperFrames. The pipeline is PDF-agnostic — pass any PDF via
+video via Remotion. The pipeline is PDF-agnostic — pass any PDF via
 --pdf, or drop one in the project root and let it auto-discover.
 
 Usage:
-    python run_deep_biology.py                            # auto: first *.pdf in project root
-    python run_deep_biology.py --pdf "Module 3.pdf"       # specific PDF
-    python run_deep_biology.py --out "videos/m3.mp4"      # custom output
-    python run_deep_biology.py --skip-llm --skip-tts      # reuse cached manifest + audio
-    python run_deep_biology.py --target-minutes 5         # shorter video
+    python run.py                            # auto: first *.pdf in project root
+    python run.py --pdf "Module 3.pdf"       # specific PDF
+    python run.py --out "videos/m3.mp4"      # custom output
+    python run.py --skip-llm --skip-tts      # reuse cached manifest + audio
+    python run.py --target-minutes 5         # shorter video
 """
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from config import CONFIG
 from deep_manifest import generate_deep_manifest
-from hyperframes_render import render_with_hyperframes
 from pipeline.clients.http_client import HTTPClient
 from pipeline.ingestion import ingest, load_doc_content
 from pipeline.script_gen import load_manifest, save_manifest
 from pipeline.tts import synthesize_scene
 from pipeline.visuals import render_visuals
+from remotion_render import render_with_remotion
 
 
 logging.basicConfig(
@@ -32,7 +32,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("deep_biology")
+log = logging.getLogger("visualnote.run")
 
 
 PDF_PATH: Path | None = None  # default: first *.pdf found in project_root
@@ -80,11 +80,12 @@ def main() -> int:
                         help="Skip visual rendering; reuse existing scene images.")
     parser.add_argument("--force-visuals", action="store_true",
                         help="Re-render all scene visuals even if PNGs exist.")
-    parser.add_argument("--no-council", action="store_true",
-                        help="Skip the 5-member council; use single-LLM legacy path.")
-    parser.add_argument("--council-fast", action="store_true",
+    parser.add_argument("--council", action="store_true",
+                        help="Use 5-member council instead of single-LLM "
+                             "(slower, 3-5 calls, more thorough).")
+    parser.add_argument("--council-fast", action="store_true", default=False,
                         help="Council with Round 2 reviews skipped (3 calls, "
-                             "faster but lower quality).")
+                             "faster but lower quality). Requires --council.")
     parser.add_argument("--council-config", type=Path, default=None,
                         help="Path to a custom council_config.json. Defaults to "
                              "pipeline/council/council_config.json. Lets you swap "
@@ -118,7 +119,7 @@ def main() -> int:
     log.info("VisualNote Deep Dive: %s", pdf_path.name)
     log.info("Target duration: ~%d minutes", args.target_minutes)
     log.info("Output: %s", output_mp4)
-    log.info("Renderer: hyperframes")
+    log.info("Renderer: Remotion")
     log.info("=" * 60)
 
     log.info("Step 1: ingesting PDF")
@@ -134,6 +135,8 @@ def main() -> int:
             log.error("--skip-llm set but no cached manifest at %s",
                       CONFIG.output_dir / "scene_manifest.json")
             return 1
+        from deep_manifest import _assign_frame_styles
+        manifest = _assign_frame_styles(manifest)
         log.info("Reusing cached manifest: %d scenes", len(manifest["scenes"]))
     log.info("Step 2: building LLM + TTS clients")
     client = HTTPClient(
@@ -148,12 +151,13 @@ def main() -> int:
 
     if not args.skip_llm:
         log.info("Step 3: generating %d-min deep-dive manifest", args.target_minutes)
-        if args.no_council:
-            log.info("Council: disabled (--no-council); using single-LLM path")
-        elif args.council_fast:
-            log.info("Council: fast mode (Round 2 reviews skipped)")
+        if args.council:
+            if args.council_fast:
+                log.info("Council: fast mode (3 LLM calls)")
+            else:
+                log.info("Council: full 5-member deliberation (5 LLM calls)")
         else:
-            log.info("Council: full 5-member deliberation")
+            log.info("Using single-LLM path (1 LLM call)")
         if args.council_config:
             log.info("Council config override: %s", args.council_config)
         manifest = generate_deep_manifest(
@@ -161,7 +165,7 @@ def main() -> int:
             client,
             target_minutes=args.target_minutes,
             max_attempts=3,
-            use_council=not args.no_council,
+            use_council=args.council,
             fast=args.council_fast,
             council_config=args.council_config,
         )
@@ -175,27 +179,62 @@ def main() -> int:
         len(scenes), total_words, total_hint,
     )
 
-    if not args.skip_tts:
-        log.info("Step 4: synthesizing TTS for each scene")
-        for scene in scenes:
-            try:
-                synthesize_scene(scene, client, voice=args.voice)
-            except Exception as exc:
-                log.warning("Scene %d TTS failed (%s); silent fallback used",
-                            scene["scene_id"], exc)
+    def _run_tts():
+        if args.skip_tts:
+            return
+        log.info("Step 4: synthesizing TTS (parallel, 6 workers)")
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {
+                pool.submit(synthesize_scene, scene, client, args.voice): scene
+                for scene in scenes
+            }
+            for future in as_completed(futures):
+                scene = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    log.warning("Scene %d TTS failed (%s)", scene["scene_id"], exc)
 
-    if not args.skip_visuals:
-        log.info("Step 5: rendering scene visuals (images, diagrams)")
-        render_visuals(manifest, doc_content, client=client,
-                        force=args.force_visuals)
-    else:
-        log.info("Step 5: skipped (--skip-visuals)")
+    def _run_visuals():
+        if args.skip_visuals:
+            log.info("Step 5: skipped (--skip-visuals)")
+            return
+        log.info("Step 5: rendering scene visuals")
+        render_visuals(manifest, doc_content, client=client, force=args.force_visuals)
 
-    log.info("Step 6: rendering with HyperFrames (engine handles audio mux)")
+    tts_error = None
+    visuals_error = None
+
+    def _safe_tts():
+        nonlocal tts_error
+        try:
+            _run_tts()
+        except Exception as exc:
+            tts_error = exc
+
+    def _safe_visuals():
+        nonlocal visuals_error
+        try:
+            _run_visuals()
+        except Exception as exc:
+            visuals_error = exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pool.submit(_safe_tts)
+        pool.submit(_safe_visuals)
+
+    if tts_error:
+        log.error("TTS step failed: %s", tts_error)
+        return 1
+    if visuals_error:
+        log.error("Visuals step failed: %s", visuals_error)
+        return 1
+
+    log.info("Step 6: rendering with Remotion")
     try:
-        render_with_hyperframes(manifest, output_mp4)
+        render_with_remotion(manifest, output_mp4)
     except Exception as exc:
-        log.error("HyperFrames render failed: %s", exc)
+        log.error("Remotion render failed: %s", exc)
         return 2
 
     log.info("=" * 60)

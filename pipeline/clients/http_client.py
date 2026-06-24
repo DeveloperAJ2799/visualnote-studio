@@ -90,6 +90,16 @@ class HTTPClient:
         self.timeout_s = timeout_s
         self._sync = httpx.Client(timeout=timeout_s)
 
+    def close(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        self._sync.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
     def _kilo_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.kilo_api_key}",
@@ -255,7 +265,14 @@ class HTTPClient:
                     if key in audio and isinstance(audio[key], str):
                         return audio[key]
                 if "url" in audio and isinstance(audio["url"], str):
-                    return audio["url"]
+                    # URL points to audio data; fetch it instead of base64-decoding
+                    try:
+                        url_resp = httpx.get(audio["url"], timeout=30)
+                        url_resp.raise_for_status()
+                        import base64 as _b64
+                        return _b64.b64encode(url_resp.content).decode("ascii")
+                    except Exception:
+                        return None
             if isinstance(audio, str):
                 return audio
         except (KeyError, IndexError, TypeError):

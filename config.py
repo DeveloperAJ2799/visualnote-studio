@@ -20,6 +20,24 @@ def _bool(value: Optional[str], default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _safe_int(value: Optional[str], default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(value: Optional[str], default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 def _detect_ffmpeg() -> str:
     """Locate an ffmpeg binary. Prefer the imageio-ffmpeg bundled copy."""
     override = os.getenv("FFMPEG_PATH")
@@ -88,6 +106,7 @@ class Config:
     frames_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output" / "frames")
     final_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "output" / "final")
     templates_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "templates")
+    remotion_project_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "remotion_project")
 
     use_mock: bool = field(default_factory=lambda: _bool(os.getenv("MIMO_USE_MOCK"), False))
 
@@ -97,10 +116,10 @@ class Config:
     )
     kilo_api_key: str = field(default_factory=lambda: os.getenv("KILO_API_KEY", ""))
     kilo_model: str = field(
-        default_factory=lambda: os.getenv("KILO_MODEL", "anthropic/claude-sonnet-4.5")
+        default_factory=lambda: os.getenv("KILO_MODEL", "openrouter/free")
     )
     kilo_fallback_model: str = field(
-        default_factory=lambda: os.getenv("KILO_FALLBACK_MODEL", "anthropic/claude-sonnet-4")
+        default_factory=lambda: os.getenv("KILO_FALLBACK_MODEL", "openrouter/free")
     )
 
     # --- TTS (Xiaomi MiMo Open Platform) ---
@@ -131,22 +150,24 @@ class Config:
     # --- Council (5-member deliberation; free models only) ---
     # Defaults come from pipeline/council/council_config.json.
     # Env vars (COUNCIL_*_MODEL, COUNCIL_ENABLED, etc.) override at runtime.
+    # Single-LLM is the default (fast, 1 call). Set COUNCIL_ENABLED=true or
+    # pass --council to use the 5-member council (slower, 3-5 calls).
     council_enabled: bool = field(
         default_factory=lambda: _bool(
             os.getenv("COUNCIL_ENABLED"),
-            _council_default("enabled", True),
+            False,
         )
     )
     council_max_retries: int = field(
-        default_factory=lambda: int(
-            os.getenv("COUNCIL_MAX_RETRIES")
-            or str(_council_default("max_retries", 3))
+        default_factory=lambda: _safe_int(
+            os.getenv("COUNCIL_MAX_RETRIES"),
+            _council_default("max_retries", 3),
         )
     )
     council_confidence_threshold: float = field(
-        default_factory=lambda: float(
-            os.getenv("COUNCIL_CONFIDENCE_THRESHOLD")
-            or str(_council_default("confidence_threshold", 0.6))
+        default_factory=lambda: _safe_float(
+            os.getenv("COUNCIL_CONFIDENCE_THRESHOLD"),
+            _council_default("confidence_threshold", 0.6),
         )
     )
     council_scriptwriter_model: str = field(

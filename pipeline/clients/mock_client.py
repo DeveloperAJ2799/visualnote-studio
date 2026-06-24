@@ -174,7 +174,7 @@ class MockClient:
             body=body or "Mock slide content.",
         )
 
-    def synthesize(self, text: str, voice: str = "instructor") -> bytes:
+    def synthesize(self, text: str, voice: str = "Chloe") -> bytes:
         words = max(1, len(text.split()))
         duration = max(1.5, min(20.0, words / 2.4))
         return _silent_wav(duration)

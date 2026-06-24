@@ -133,12 +133,11 @@ def _build_scene_clip(
     return clip.set_audio(audio_clip)
 
 
-def _build_final_clip(manifest: dict) -> Tuple[VideoClip, List[Path]]:
-    """Build the concatenated VideoClip from all scenes. Returns (clip, temp_paths)."""
+def _build_final_clip(manifest: dict) -> Tuple[VideoClip, List[VideoClip]]:
+    """Build the concatenated VideoClip from all scenes. Returns (final, clips)."""
     scenes = manifest.get("scenes", [])
     if not scenes:
         raise ValueError("Manifest has no scenes to assemble.")
-    temp_paths: List[Path] = []
     clips: List[VideoClip] = []
     for i, scene in enumerate(scenes):
         scene_id = scene["scene_id"]
@@ -151,7 +150,7 @@ def _build_final_clip(manifest: dict) -> Tuple[VideoClip, List[Path]]:
         )
         clips.append(clip)
     final = concatenate_videoclips(clips, method="compose", padding=0)
-    return final, temp_paths
+    return final, clips
 
 
 def _ffmpeg_final_encode(
@@ -192,7 +191,7 @@ def assemble(manifest: dict, output_path: Path) -> Path:
     output_path = Path(output_path)
     log.info("Assembling %d scenes into %s", len(manifest["scenes"]), output_path)
 
-    final_clip, _ = _build_final_clip(manifest)
+    final_clip, clips = _build_final_clip(manifest)
 
     with tempfile.TemporaryDirectory(prefix="visualnote_assemble_") as tmp:
         intermediate = Path(tmp) / TEMP_BASENAME
@@ -209,6 +208,8 @@ def assemble(manifest: dict, output_path: Path) -> Path:
             )
         finally:
             final_clip.close()
+            for c in clips:
+                c.close()
 
         if not intermediate.exists() or intermediate.stat().st_size == 0:
             raise RuntimeError("moviepy did not produce an intermediate file")

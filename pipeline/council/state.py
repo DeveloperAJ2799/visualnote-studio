@@ -106,6 +106,15 @@ class CouncilState:
 
     def dissent_summary(self) -> str:
         """Plain-English one-liner summarizing any flags from reviewers."""
+        if not self.reviews:
+            # Distinguish "skipped" from "ran but all reviewers failed"
+            review_records = [r for r in self.records if r.role == "reviewer"]
+            if review_records:
+                return (
+                    "Review phase ran but produced no usable output "
+                    f"({len(review_records)} reviewer(s) failed)."
+                )
+            return "No review phase was run (skipped or --council-fast)."
         flags: List[str] = []
         for review in self.reviews:
             for c in review.critiques:

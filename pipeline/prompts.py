@@ -30,7 +30,7 @@ def scene_gen_user(doc_text: str, doc_title_hint: str) -> str:
         2. Each narration must be self-contained, conversational, and 60–120 words.
         3. Use "manim_animation" for mathematical, graph, or process-flow concepts.
         4. Use "html_frame" for comparison tables, timelines, or structured lists.
-        5. Use "image_overlay" for real-world or biological examples needing a photo.
+        5. Use "image_overlay" for real-world examples or illustrations needing a photo.
         6. Use "title_card" only for intro/outro scenes.
         7. duration_hint_s = estimated seconds to read the narration at 140 WPM.
         8. manim_prompt must be a single, concrete, self-contained instruction for

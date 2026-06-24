@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -110,6 +109,8 @@ def step_manifest(
     if not args.force_manifest:
         cached = load_manifest()
         if cached:
+            from deep_manifest import _assign_frame_styles
+            cached = _assign_frame_styles(cached)
             log.info(
                 "Manifest: reusing cached scene_manifest.json (%d scenes)",
                 len(cached.get("scenes", [])),
@@ -164,6 +165,8 @@ def step_synthesize(
     tts: TTSClient,
     args: argparse.Namespace,
 ) -> None:
+    from pipeline.tts import _silent_wav_for_text
+
     scenes = manifest.get("scenes", [])
     log.info("TTS: synthesizing %d scenes (voice=%s)", len(scenes), args.voice)
     for scene in tqdm(scenes, desc="TTS", unit="scene"):
@@ -171,7 +174,14 @@ def step_synthesize(
             synthesize_scene(scene, tts, voice=args.voice)
         except Exception as exc:
             log.warning("Scene %d TTS failed: %s; emitting silent fallback", scene["scene_id"], exc)
-            synthesize_scene({"scene_id": scene["scene_id"], "narration": "."}, tts, voice=args.voice)
+            # Write a silent WAV so the assembler always has audio for every
+            # scene.  The duration is estimated from the narration word count.
+            wav_path = (
+                CONFIG.scenes_dir / f"scene_{scene['scene_id']:03d}_audio.wav"
+            )
+            narration = scene.get("narration") or "."
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_path.write_bytes(_silent_wav_for_text(narration))
 
 
 def build_argparser() -> argparse.ArgumentParser:

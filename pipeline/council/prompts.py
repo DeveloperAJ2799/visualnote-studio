@@ -171,12 +171,18 @@ def visual_designer_user(
 
         For EACH scene, pick:
         1. ``frame_style`` — one of:
-           - "text_only"     → full-screen text, no diagram area
-           - "image_left"    → diagram/image on left, text on right
-           - "diagram_center"→ big animated diagram, caption bar at bottom
-           - "split_compare" → two equal columns of comparison
-           - "quote_callout" → one big quote/fact, full screen
-           - "title_hero"    → just the title, huge, full screen
+           - "title_hero"         → huge title, full screen (intros/outros)
+           - "text_only"          → centered text, no image (definitions)
+           - "quote_callout"      → one big quote/fact, full screen
+           - "image_left"         → diagram/image on left, text on right
+           - "image_right"        → text on left, diagram/image on right
+           - "diagram_center"     → big centered diagram, caption below
+           - "split_compare"      → two equal columns, side by side
+           - "listing_columns"    → 3-column grid for lists/enumerations
+           - "full_bleed"         → full-screen image with text overlay
+           - "steps_horizontal"   → horizontal numbered timeline
+           - "stats_grid"         → 2x2 grid of key stats/points
+           - "chapter_marker"     → section divider with large number
         2. ``diagram`` — null, OR a dict with:
            - ``primitive``: "orbit" | "molecule" | "helix" | "cell" |
              "graph_bar" | "graph_line" | "tree_hierarchy" | "cycle" |
@@ -187,10 +193,16 @@ def visual_designer_user(
 
         Frame-style rules of thumb:
         - Use "title_hero" for the first and last scene.
+        - Use "chapter_marker" for major section transitions.
         - Use "quote_callout" for a key takeaway / memorable line.
-        - Use "image_left" when a real photo would help.
+        - Use "image_left" when a real photo would help (diagram left, text right).
+        - Use "image_right" when context/explanation comes first (text left, diagram right).
         - Use "diagram_center" for atoms, molecules, cells — anything the viewer must SEE.
         - Use "split_compare" for "X vs Y" content.
+        - Use "listing_columns" for lists of items, enumerations, or multi-point summaries.
+        - Use "full_bleed" for dramatic visuals or full-screen illustrations.
+        - Use "steps_horizontal" for processes, sequences, or step-by-step instructions.
+        - Use "stats_grid" for 4 key statistics, metrics, or important numbers.
         - Use "text_only" for pure definitions or recaps.
 
         Output schema (output ONLY this JSON object, nothing else):
@@ -199,7 +211,7 @@ def visual_designer_user(
           "scene_designs": [
             {{
               "scene_id": <int>,
-              "frame_style": "<one of the 6 above>",
+              "frame_style": "<one of the 12 above>",
               "diagram": null | {{"primitive": "<one of 12>", "params": {{}} }},
               "animations": [<list>],
               "highlights": [<list>],
@@ -268,7 +280,7 @@ def _review_rubric(reviewer_name: str) -> str:
             """
             You verify FACTS. For every concrete claim in Member A's
             narration (numbers, names, definitions, "all X do Y" claims,
-            chemical/biological facts), find the supporting paragraph in
+            technical/numerical claims), find the supporting paragraph in
             the source document above. If you cannot find it, mark
             "verdict": "reject" and explain what is unverified.
 
@@ -395,8 +407,9 @@ def chairman_user(
         2. For each scene, set a confidence score 0.0-1.0 based on the
            reviewers' verdicts (approve ≈ 0.9, concern ≈ 0.7, reject ≈ 0.4).
         3. Set ``visual_type`` based on the chosen frame_style:
-           - text_only, quote_callout, title_hero → "title_card"
-           - image_left, diagram_center, split_compare → "manim_animation"
+           - text_only, quote_callout, title_hero, chapter_marker → "title_card"
+           - image_left, image_right, diagram_center, split_compare,
+             listing_columns, full_bleed, steps_horizontal, stats_grid → "manim_animation"
              (or "mixed" if the diagram primitive requires HTML/photo)
         4. If a reviewer's "reject" verdict is overruled, mark
            ``chairman_override: true`` and record the original concern in
@@ -420,7 +433,7 @@ def chairman_user(
               "manim_prompt": "<string or null>",
               "image_query": "<string or null>",
               "html_content": "<string or null>",
-              "frame_style": "<text_only|image_left|diagram_center|split_compare|quote_callout|title_hero>",
+              "frame_style": "<one of the 12 frame styles>",
               "diagram": null | {{"primitive": "<str>", "params": {{}} }},
               "animations": [<list>],
               "highlights": [<list>],

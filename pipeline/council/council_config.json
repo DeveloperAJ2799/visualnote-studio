@@ -2,12 +2,13 @@
   "_comment_phases": "The orchestrator runs phases IN ORDER. Within a phase, members run IN PARALLEL. A 'phases' list (vs the legacy 'rounds') is the source of truth: add/remove phases to change the council's deliberation shape.",
   "_comment_members": "Each member has: model, temperature, system_prompt, output_kind, role, label. 'output_kind' is one of: 'script' (drafts text), 'design' (drafts visuals), 'review' (reviews others), 'synthesis' (final merge). 'role' is freeform (used for the chairman's identity). 'system_prompt' is the member's full system prompt — edit to change the member's behavior. No hardcoded prompts in Python.",
   "_comment_models": "Use ANY model name supported by the Kilo Code AI Gateway. Env vars (COUNCIL_<MEMBER>_MODEL, COUNCIL_ENABLED, COUNCIL_MAX_RETRIES, COUNCIL_CONFIDENCE_THRESHOLD) override these defaults at runtime.",
-  "enabled": true,
+  "enabled": false,
   "max_retries": 3,
   "confidence_threshold": 0.6,
   "fallback_chain": [
-    "kilo-auto/free",
-    "openrouter/free"
+    "stepfun/step-3.7-flash:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "poolside/laguna-m.1:free"
   ],
   "phases": [
     {
@@ -21,7 +22,7 @@
       "description": "Phase 2: each reviewer evaluates the members listed under their 'reviews' field. Skippable in --council-fast mode.",
       "parallel": true,
       "skippable": true,
-      "members": ["scriptwriter", "visual_designer", "fact_checker", "pedagogy_reviewer"]
+      "members": ["fact_checker", "pedagogy_reviewer"]
     },
     {
       "name": "synthesis",
@@ -43,7 +44,7 @@
     },
     "visual_designer": {
       "label": "Member B",
-      "model": "openrouter/owl-alpha",
+      "model": "stepfun/step-3.7-flash:free",
       "temperature": 0.5,
       "output_kind": "design",
       "role": "creator",
@@ -53,7 +54,7 @@
     },
     "fact_checker": {
       "label": "Member C",
-      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "model": "poolside/laguna-m.1:free",
       "temperature": 0.2,
       "output_kind": "review",
       "role": "reviewer",
@@ -73,7 +74,7 @@
     },
     "chairman": {
       "label": "Chairman",
-      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "model": "stepfun/step-3.7-flash:free",
       "temperature": 0.3,
       "output_kind": "synthesis",
       "role": "chairman",

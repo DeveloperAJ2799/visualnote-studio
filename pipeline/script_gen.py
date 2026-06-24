@@ -1,12 +1,11 @@
 """Scene manifest generation.
 
-By default, uses the 5-member council (Scriptwriter, Visual Designer,
-Fact-Checker, Pedagogy Reviewer, Chairman) to produce the manifest. When
-``--no-council`` is set (or CONFIG.council_enabled is False), falls back
-to the legacy single-LLM call against the supplied ``MiMoClient``.
+By default, uses the single-LLM path (1 call, fast) against the supplied
+``MiMoClient``. Pass ``use_council=True`` (or set CONFIG.council_enabled
+to True) to use the 5-member council (3-5 calls, slower but more thorough).
 
-Either way, the output is validated against the PRD §8 schema, repaired
-if possible, and saved to `output/scene_manifest.json`.
+The output is validated against the PRD §8 schema, repaired if possible,
+and saved to `output/scene_manifest.json`.
 """
 from __future__ import annotations
 
@@ -84,7 +83,7 @@ def _validate_manifest(manifest: Dict[str, Any]) -> List[str]:
         if not isinstance(narr, str) or not narr.strip():
             errors.append(f"scene[{i}] has empty narration")
         dur = scene.get("duration_hint_s")
-        if not isinstance(dur, int) or dur <= 0:
+        if not isinstance(dur, (int, float)) or dur <= 0:
             errors.append(f"scene[{i}] has invalid duration_hint_s={dur!r}")
     return errors
 
@@ -100,7 +99,7 @@ def _repair_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
             scene["title"] = "Untitled Scene"
         if not scene.get("narration"):
             scene["narration"] = "Placeholder narration for this scene."
-        if not isinstance(scene.get("duration_hint_s"), int) or scene["duration_hint_s"] <= 0:
+        if not isinstance(scene.get("duration_hint_s"), (int, float)) or scene["duration_hint_s"] <= 0:
             word_count = max(1, len(scene["narration"].split()))
             scene["duration_hint_s"] = max(15, int(word_count / 2.3))
         vt = scene.get("visual_type")

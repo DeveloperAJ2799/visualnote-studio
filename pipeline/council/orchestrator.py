@@ -270,14 +270,24 @@ class Council:
             )
             return record
 
-        state.member_outputs[member.name] = record.parsed
+        # Only store creative outputs (script, design) — reviewers must not
+        # overwrite a creator's draft when they appear in a later phase.
+        if member.output_kind in ("script", "design", "synthesis"):
+            state.member_outputs[member.name] = record.parsed
 
         if member.output_kind == "review":
             review = _parsed_to_review(member, targets or [], record)
             state.reviews.append(review)
 
         if member.is_chairman or member.output_kind == "synthesis":
-            state.chairman_output = record.parsed
+            if _validate_chairman_output(record.parsed):
+                state.chairman_output = record.parsed
+            else:
+                log.warning(
+                    "Council %s: output failed structural validation; "
+                    "will use fallback manifest",
+                    member.name,
+                )
 
         return record
 
@@ -311,6 +321,7 @@ class Council:
                 messages=messages,
                 json_mode=True,
                 temperature=member.temperature,
+                timeout_s=300.0,
                 max_retries=CONFIG.council_max_retries,
                 fallback_models=get_fallback_chain(),
             )
@@ -456,8 +467,14 @@ def _parsed_to_review(
 _FRAME_STYLE_CYCLE = [
     "title_hero",
     "image_left",
+    "image_right",
     "diagram_center",
     "split_compare",
+    "listing_columns",
+    "full_bleed",
+    "steps_horizontal",
+    "stats_grid",
+    "chapter_marker",
     "quote_callout",
     "text_only",
 ]
@@ -507,9 +524,107 @@ def _mock_split_scenes(doc_text: str, target_minutes: int) -> List[Dict[str, Any
     return scenes
 
 
+def _validate_chairman_output(parsed: Any) -> bool:
+    """Check that the chairman's JSON has the minimum required structure.
+
+    Returns True if the output looks usable; False if it should be treated
+    as a failure so the fallback manifest kicks in.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if not isinstance(parsed.get("scenes"), list) or not parsed["scenes"]:
+        return False
+    for scene in parsed["scenes"]:
+        if not isinstance(scene, dict):
+            return False
+        # scene_id must be an integer (used in format strings downstream)
+        sid = scene.get("scene_id")
+        if not isinstance(sid, int) or sid <= 0:
+            return False
+        if not isinstance(scene.get("title"), str) or not scene["title"].strip():
+            return False
+        if not isinstance(scene.get("narration"), str) or not scene["narration"].strip():
+            return False
+    return True
+
+
 def _fallback_manifest(state: CouncilState) -> Dict[str, Any]:
-    """Last-ditch manifest when even the chairman fails."""
-    return _build_merged_manifest(state, low_confidence_all=True, confidence=0.3)
+    """Last-ditch manifest when the chairman fails.
+
+    Unlike ``_build_merged_manifest``, this tries to salvage reviewer
+    feedback: it computes per-scene confidence from the review verdicts
+    so that fact-checked / approved scenes are not penalized alongside
+    genuinely problematic ones.
+    """
+    # Build a per-scene confidence map from review verdicts.
+    # Use min() — when the chairman has failed, we cannot overrule rejection.
+    scene_confidence: Dict[int, float] = {}
+    for review in state.reviews:
+        for c in review.critiques:
+            if c.verdict == "approve":
+                scene_confidence[c.scene_id] = min(
+                    scene_confidence.get(c.scene_id, 1.0), 0.9
+                )
+            elif c.verdict == "concern":
+                scene_confidence[c.scene_id] = min(
+                    scene_confidence.get(c.scene_id, 1.0), 0.7
+                )
+            elif c.verdict == "reject":
+                scene_confidence[c.scene_id] = min(
+                    scene_confidence.get(c.scene_id, 1.0), 0.4
+                )
+
+    sw = state.member_outputs.get("scriptwriter", {}) or {}
+    vd = state.member_outputs.get("visual_designer", {}) or {}
+    designs_by_id = {
+        d.get("scene_id"): d for d in vd.get("scene_designs", []) or []
+    }
+    scenes: List[Dict[str, Any]] = []
+    threshold = CONFIG.council_confidence_threshold
+    for s in sw.get("scenes", []) or []:
+        sid = s.get("scene_id")
+        d = designs_by_id.get(sid, {})
+        frame_style = d.get("frame_style", "text_only")
+        # Use review-derived confidence when available; otherwise 0.5
+        conf = scene_confidence.get(sid, 0.5)
+        vt = _frame_to_visual_type(
+            frame_style, html_content=s.get("html_content")
+        )
+        merged = {
+            "scene_id": sid,
+            "title": s.get("title", ""),
+            "narration": s.get("narration", ""),
+            "duration_hint_s": int(s.get("duration_hint_s", 30) or 30),
+            "visual_type": vt,
+            "manim_prompt": s.get("manim_prompt"),
+            "image_query": s.get("image_query"),
+            "html_content": s.get("html_content"),
+            "frame_style": frame_style,
+            "diagram": d.get("diagram"),
+            "animations": d.get("animations", []) or [],
+            "highlights": d.get("highlights", []) or [],
+            "confidence": conf,
+            "low_confidence": conf < threshold,
+            "chairman_override": False,
+        }
+        scenes.append(merged)
+
+    # Average confidence over scenes that actually exist in the output,
+    # not over ghost scene IDs from reviews that reference non-existent scenes.
+    if scenes:
+        overall = sum(
+            scene_confidence.get(s["scene_id"], 0.5) for s in scenes
+        ) / len(scenes)
+    else:
+        overall = 0.3
+    return {
+        "document_title": sw.get("document_title", state.doc_title_hint),
+        "total_scenes": len(scenes),
+        "scenes": scenes,
+        "dissent_summary": state.dissent_summary(),
+        "confidence_overall": overall,
+        "_fallback": True,
+    }
 
 
 def _build_merged_manifest(
@@ -531,7 +646,9 @@ def _build_merged_manifest(
         sid = s.get("scene_id")
         d = designs_by_id.get(sid, {})
         frame_style = d.get("frame_style", "text_only")
-        vt = _frame_to_visual_type(frame_style)
+        vt = _frame_to_visual_type(
+            frame_style, html_content=s.get("html_content")
+        )
         merged = {
             "scene_id": sid,
             "title": s.get("title", ""),
@@ -560,11 +677,25 @@ def _build_merged_manifest(
     }
 
 
-def _frame_to_visual_type(frame_style: str) -> str:
-    """Map the designer's frame_style to the legacy visual_type enum."""
-    if frame_style in ("text_only", "quote_callout", "title_hero"):
+def _frame_to_visual_type(
+    frame_style: str,
+    *,
+    html_content: Any = None,
+) -> str:
+    """Map the designer's frame_style to the legacy visual_type enum.
+
+    When the chairman or fallback manifest provides a usable ``html_content``
+    string, honour it — the LLM generated that HTML for a reason.  Without
+    that signal, fall back to the original frame-style mapping.
+    """
+    if frame_style in ("text_only", "quote_callout", "title_hero", "chapter_marker"):
         return "title_card"
-    if frame_style in ("image_left", "diagram_center", "split_compare"):
+    if frame_style in (
+        "image_left", "image_right", "diagram_center", "split_compare",
+        "listing_columns", "full_bleed", "steps_horizontal", "stats_grid",
+    ):
+        if html_content and isinstance(html_content, str) and html_content.strip():
+            return "html_frame"
         return "manim_animation"
     return "title_card"
 
