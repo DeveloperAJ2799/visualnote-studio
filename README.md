@@ -251,6 +251,4 @@ English) and `confidence_overall`.
 
 ---
 
-## License
 
-MIT
