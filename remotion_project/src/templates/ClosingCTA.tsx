@@ -3,106 +3,140 @@ import {
   AbsoluteFill,
   useCurrentFrame,
   useVideoConfig,
+  spring,
   interpolate,
 } from "remotion";
-import { theme } from "../theme";
+import { theme, springConfig, typography } from "../theme";
+import { ChalkBackground } from "../components/ChalkBackground";
+import { ConceptAnnotation } from "../components/ConceptAnnotation";
 import type { ClosingCTAProps } from "../types";
 
+/**
+ * ClosingCTA - IGWANI closing/cta template.
+ *
+ * Clean closing with heading, CTA text, and optional links.
+ * Amber accent, generous negative space.
+ */
 export const ClosingCTA: React.FC<ClosingCTAProps> = ({
   heading,
   cta_text,
-  links,
+  links = [],
+  annotations = [],
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const headingOpacity = interpolate(frame, [0, 0.6 * fps], [0, 1], {
+  const headingScale = spring({
+    frame,
+    fps,
+    config: springConfig,
+  });
+
+  const headingOpacity = interpolate(frame, [0, 15], [0, 1], {
     extrapolateRight: "clamp",
   });
-  const ctaOpacity = interpolate(
-    frame,
-    [0.4 * fps, 1.0 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const ctaScale = interpolate(
-    frame,
-    [0.4 * fps, 1.0 * fps],
-    [0.9, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+
+  const ctaOpacity = interpolate(frame, [20, 35], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  const ctaY = interpolate(frame, [20, 35], [20, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.bg,
-        justifyContent: "center",
-        alignItems: "center",
-        fontFamily: theme.fontFamily,
-      }}
-    >
-      <div
+    <ChalkBackground>
+      <AbsoluteFill
         style={{
-          opacity: headingOpacity,
-          textAlign: "center",
-          marginBottom: 48,
+          padding: theme.padding,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "center",
         }}
       >
-        <h1
-          style={{
-            fontSize: 64,
-            color: theme.accent,
-            margin: 0,
-            fontWeight: 700,
-          }}
-        >
-          {heading}
-        </h1>
-      </div>
-      <div
-        style={{
-          opacity: ctaOpacity,
-          transform: `scale(${ctaScale})`,
-          textAlign: "center",
-        }}
-      >
+        {/* Heading */}
         <div
           style={{
-            display: "inline-block",
-            backgroundColor: theme.accent,
-            color: theme.bg,
-            padding: "20px 48px",
-            borderRadius: 12,
-            fontSize: 32,
-            fontWeight: 700,
+            opacity: headingOpacity,
+            transform: `scale(${headingScale})`,
+            marginBottom: 40,
           }}
         >
-          {cta_text}
+          <h2
+            style={{
+              fontSize: typography.displayL,
+              fontFamily: theme.fontFamilyDisplay,
+              color: theme.chalkWhite,
+              margin: 0,
+              fontWeight: 700,
+              textAlign: "center",
+            }}
+          >
+            {heading}
+          </h2>
         </div>
-      </div>
-      {links && links.length > 0 && (
+
+        {/* CTA text */}
         <div
           style={{
             opacity: ctaOpacity,
-            marginTop: 32,
-            display: "flex",
-            gap: 24,
+            transform: `translateY(${ctaY}px)`,
           }}
         >
-          {links.map((link, i) => (
-            <p
-              key={i}
-              style={{
-                fontSize: 22,
-                color: theme.textMuted,
-                margin: 0,
-              }}
-            >
-              {link}
-            </p>
-          ))}
+          <p
+            style={{
+              fontSize: typography.bodyL,
+              fontFamily: theme.fontFamilyBody,
+              color: theme.accentAmber,
+              margin: 0,
+              fontWeight: 500,
+            }}
+          >
+            {cta_text}
+          </p>
         </div>
-      )}
-    </AbsoluteFill>
+
+        {/* Links */}
+        {links.length > 0 && (
+          <div
+            style={{
+              opacity: ctaOpacity,
+              marginTop: 40,
+              display: "flex",
+              gap: 32,
+            }}
+          >
+            {links.map((link, i) => (
+              <span
+                key={i}
+                style={{
+                  fontSize: typography.bodyM,
+                  fontFamily: theme.fontFamilyMono,
+                  color: theme.codeMint,
+                }}
+              >
+                {link}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {annotations.map((annotation, i) => (
+          <ConceptAnnotation
+            key={i}
+            type={annotation.type}
+            x={400}
+            y={400}
+            width={200}
+            height={100}
+            startFrame={annotation.startFrame}
+            color={annotation.color}
+          />
+        ))}
+      </AbsoluteFill>
+    </ChalkBackground>
   );
 };

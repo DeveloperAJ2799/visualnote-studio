@@ -3,89 +3,126 @@ import {
   AbsoluteFill,
   useCurrentFrame,
   useVideoConfig,
+  spring,
   interpolate,
 } from "remotion";
-import { theme } from "../theme";
+import { theme, springConfig, typography } from "../theme";
+import { ChalkBackground } from "../components/ChalkBackground";
+import { ConceptAnnotation } from "../components/ConceptAnnotation";
 import type { QuoteHighlightProps } from "../types";
 
+/**
+ * QuoteHighlight - IGWANI quote/key insight template.
+ *
+ * Large quote text with attribution.
+ * Amber accent on the quote marks, generous negative space.
+ */
 export const QuoteHighlight: React.FC<QuoteHighlightProps> = ({
   quote_text,
   attribution,
+  annotations = [],
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const quoteOpacity = interpolate(frame, [0, 0.6 * fps], [0, 1], {
-    extrapolateRight: "clamp",
-  });
-  const quoteY = interpolate(frame, [0, 0.6 * fps], [20, 0], {
-    extrapolateRight: "clamp",
-  });
-  const attrOpacity = interpolate(
+  const quoteScale = spring({
     frame,
-    [0.5 * fps, 1.0 * fps],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+    fps,
+    config: springConfig,
+  });
+
+  const quoteOpacity = interpolate(frame, [0, 15], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+
+  const attrOpacity = interpolate(frame, [25, 40], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.bg,
-        justifyContent: "center",
-        alignItems: "center",
-        fontFamily: theme.fontFamily,
-      }}
-    >
-      <div
+    <ChalkBackground>
+      <AbsoluteFill
         style={{
-          opacity: quoteOpacity,
-          transform: `translateY(${quoteY}px)`,
-          maxWidth: 1200,
-          textAlign: "center",
-          position: "relative",
-          padding: "0 64px",
+          padding: theme.padding,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "flex-start",
         }}
       >
+        {/* Quote mark */}
         <div
           style={{
-            position: "absolute",
-            left: 0,
-            top: -20,
+            opacity: quoteOpacity,
+            transform: `scale(${quoteScale})`,
             fontSize: 120,
-            color: theme.accent,
-            opacity: 0.3,
-            fontFamily: "Georgia, serif",
+            fontFamily: theme.fontFamilyDisplay,
+            color: theme.accentAmber,
             lineHeight: 1,
+            marginBottom: -20,
           }}
         >
-          {"\u201C"}
+          "
         </div>
-        <p
+
+        {/* Quote text */}
+        <div
           style={{
-            fontSize: 44,
-            color: theme.text,
-            fontStyle: "italic",
-            lineHeight: 1.6,
-            margin: 0,
+            opacity: quoteOpacity,
+            transform: `scale(${quoteScale})`,
+            transformOrigin: "left center",
+            maxWidth: 1200,
           }}
         >
-          {quote_text}
-        </p>
-      </div>
-      {attribution && (
-        <div style={{ opacity: attrOpacity, marginTop: 32 }}>
           <p
             style={{
-              fontSize: 24,
-              color: theme.textMuted,
+              fontSize: typography.displayM,
+              fontFamily: theme.fontFamilyDisplay,
+              color: theme.chalkWhite,
               margin: 0,
+              fontWeight: 500,
+              lineHeight: 1.3,
+              fontStyle: "italic",
             }}
           >
-            {"\u2014 "}{attribution}
+            {quote_text}
           </p>
         </div>
-      )}
-    </AbsoluteFill>
+
+        {/* Attribution */}
+        {attribution && (
+          <div
+            style={{
+              opacity: attrOpacity,
+              marginTop: 32,
+            }}
+          >
+            <span
+              style={{
+                fontSize: typography.bodyM,
+                fontFamily: theme.fontFamilyBody,
+                color: theme.chalkDim,
+              }}
+            >
+              — {attribution}
+            </span>
+          </div>
+        )}
+
+        {annotations.map((annotation, i) => (
+          <ConceptAnnotation
+            key={i}
+            type={annotation.type}
+            x={400}
+            y={400}
+            width={200}
+            height={100}
+            startFrame={annotation.startFrame}
+            color={annotation.color}
+          />
+        ))}
+      </AbsoluteFill>
+    </ChalkBackground>
   );
 };

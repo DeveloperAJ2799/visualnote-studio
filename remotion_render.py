@@ -27,48 +27,52 @@ REMOTION_PROJECT = CONFIG.project_root / "remotion_project"
 FPS = 30
 
 # Mapping: current frame_style → PRD template name
+# IGWANI spec: visual concepts only, no bullet lists
 _FRAME_STYLE_TO_TEMPLATE: Dict[str, str] = {
     # title variants
     "title_hero": "title_intro",
     "chapter_marker": "title_intro",
-    # text / list variants
-    "text_only": "bullet_explainer",
-    "listing_columns": "bullet_explainer",
-    "stats_grid": "bullet_explainer",
-    "type_columns": "bullet_explainer",
+    # diagram / flow variants
+    "diagram_center": "concept_diagram",
+    "flow_chain": "process_flow",
+    "steps_horizontal": "process_flow",
+    "process_flow": "process_flow",
+    "flowchart": "process_flow",
+    "infographic": "concept_diagram",
+    "annotated_diagram": "concept_diagram",
     # comparison
-    "split_compare": "comparison_table",
-    # process / flow variants
-    "steps_horizontal": "step_process",
-    "flow_chain": "step_process",
-    "process_flow": "step_process",
-    "flowchart": "step_process",
+    "split_compare": "comparison_visual",
+    "listing_columns": "comparison_visual",
+    "type_columns": "comparison_visual",
     # quote
     "quote_callout": "quote_highlight",
-    # image / diagram variants → bullet_explainer with title
-    "image_left": "bullet_explainer",
-    "image_right": "bullet_explainer",
-    "full_bleed": "bullet_explainer",
-    "diagram_center": "bullet_explainer",
-    "infographic": "bullet_explainer",
-    "annotated_diagram": "bullet_explainer",
-    # data viz fallback → bullet_explainer
-    "venn_diagram": "bullet_explainer",
-    "pyramid": "bullet_explainer",
-    "cycle_diagram": "bullet_explainer",
-    "funnel": "bullet_explainer",
-    "pie_chart": "bullet_explainer",
-    "bar_chart": "bullet_explainer",
+    # data viz
+    "venn_diagram": "concept_diagram",
+    "pyramid": "process_flow",
+    "cycle_diagram": "process_flow",
+    "funnel": "process_flow",
+    "pie_chart": "concept_diagram",
+    "bar_chart": "concept_diagram",
+    # stats
+    "stats_grid": "stat_beat",
 }
 
 # Keyword-based template assignment (used when no frame_style is set)
+# IGWANI spec: visual concepts only, no bullet lists
 _KEYWORD_TEMPLATE: list[tuple[list[str], str]] = [
-    (["vs", "versus", "comparison", "compare", "difference"], "comparison_table"),
-    (["step", "process", "sequence", "workflow", "first", "then", "finally"], "step_process"),
+    (["vs", "versus", "comparison", "compare", "difference"], "comparison_visual"),
+    (["step", "process", "sequence", "workflow", "first", "then", "finally"], "process_flow"),
     (["quote", "takeaway", "key insight", "remember"], "quote_highlight"),
-    (["tool", "app", "site", "software", "platform"], "tool_showcase"),
-    (["list", "items", "uses", "functions", "roles", "types", "categories"], "bullet_explainer"),
+    (["diagram", "structure", "components", "parts", "anatomy"], "concept_diagram"),
+    (["cycle", "flow", "chain", "cycle"], "process_flow"),
 ]
+
+# Annotation types for auto-generation
+_ANNOTATION_KEYWORDS: Dict[str, List[str]] = {
+    "circle": ["number", "percent", "stat", "result", "accuracy"],
+    "underline": ["important", "key", "critical", "essential", "note", "remember"],
+    "arrow": ["leads to", "results in", "creates", "produces", "generates"],
+}
 
 
 def _resolve_template(scene: Dict[str, Any], is_first: bool, is_last: bool) -> str:
@@ -93,36 +97,44 @@ def _resolve_template(scene: Dict[str, Any], is_first: bool, is_last: bool) -> s
         if any(kw in text for kw in keywords):
             return tmpl
 
-    return "bullet_explainer"
+    return "concept_diagram"
 
 
 def _build_fields(scene: Dict[str, Any], template: str) -> Dict[str, Any]:
-    """Extract the ``fields`` dict for a given template from the scene data."""
+    """Extract the ``fields`` dict for a given template from the scene data.
+    
+    IGWANI spec: visual concepts only, no bullet lists.
+    """
     title = scene.get("title", "")
     narration = scene.get("narration", "")
 
     if template == "title_intro":
         return {"title": title, "subtitle": narration[:80] if len(narration) > 80 else ""}
 
-    if template == "bullet_explainer":
-        # Split narration into rough bullet points
-        bullets = _narration_to_bullets(narration)
-        return {"heading": title, "bullets": bullets}
-
-    if template == "tool_showcase":
+    if template == "concept_diagram":
+        # Create a simple diagram from the narration
         return {
-            "tool_name": title,
-            "description": narration,
-            "tool_logo_url": None,
-            "link": None,
+            "title": title,
+            "nodes": [
+                {"x": 960, "y": 400, "label": title.split(":")[0] if ":" in title else title[:20], "sublabel": "Concept", "enterFrame": 20, "shape": "circle", "size": 180}
+            ],
+            "connectors": []
         }
 
-    if template == "comparison_table":
-        return {"columns": ["Option A", "Option B"], "rows": [[title, narration[:60]]]}
+    if template == "process_flow":
+        # Create a process flow from the narration
+        steps = _narration_to_visual_steps(narration)
+        return {"title": title, "steps": steps}
 
-    if template == "step_process":
-        steps = _narration_to_steps(narration)
-        return {"steps": steps}
+    if template == "comparison_visual":
+        # Create a comparison from the narration
+        return {
+            "title": title,
+            "leftLabel": "Option A",
+            "rightLabel": "Option B",
+            "leftItems": [{"label": "Feature 1"}, {"label": "Feature 2"}],
+            "rightItems": [{"label": "Feature 1"}, {"label": "Feature 2"}]
+        }
 
     if template == "quote_highlight":
         return {"quote_text": narration, "attribution": None}
@@ -159,6 +171,96 @@ def _narration_to_steps(text: str) -> List[Dict[str, str]]:
     return steps
 
 
+def _narration_to_visual_steps(text: str) -> List[Dict[str, Any]]:
+    """Convert narration into visual steps for process flow.
+    
+    IGWANI spec: visual concepts only, no bullet lists.
+    Returns step objects with x/y positions for diagram layout.
+    """
+    sentences = [s.strip() for s in text.replace("\n", " ").split(".") if s.strip()]
+    if not sentences:
+        return [{"label": "Step 1", "sublabel": "Process", "x": 200, "y": 440, "enterFrame": 20}]
+    
+    steps = []
+    num_steps = min(len(sentences), 5)
+    x_positions = [200, 520, 840, 1160, 1480]
+    
+    for i in range(num_steps):
+        # Extract key phrase from sentence (first few words)
+        words = sentences[i].split()[:3]
+        label = " ".join(words) if words else f"Step {i + 1}"
+        steps.append({
+            "label": label,
+            "sublabel": f"Step {i + 1}",
+            "x": x_positions[i] if i < len(x_positions) else 200 + i * 320,
+            "y": 440,
+            "enterFrame": 20 + i * 30
+        })
+    return steps
+
+
+def _extract_annotations(scene: Dict[str, Any], duration_frames: int) -> List[Dict[str, Any]]:
+    """Extract annotations from scene manifest, or generate auto-annotations.
+
+    Priority:
+    1. Manual annotations from scene.annotations (if present)
+    2. Auto-generated annotations from narration text
+    """
+    # Check for manual annotations in manifest
+    if scene.get("annotations"):
+        manual = scene["annotations"]
+        if isinstance(manual, list) and len(manual) > 0:
+            # Validate and normalize manual annotations
+            validated = []
+            for ann in manual:
+                if isinstance(ann, dict) and "type" in ann and "startFrame" in ann:
+                    validated.append({
+                        "type": ann["type"],
+                        "target": ann.get("target", ""),
+                        "startFrame": ann["startFrame"],
+                        "duration": ann.get("duration", 20),
+                        "color": ann.get("color"),
+                    })
+            if validated:
+                return validated
+
+    # Auto-generate annotations from narration
+    narration = scene.get("narration", "")
+    if len(narration.split()) < 20:
+        return []  # Too short for annotations
+
+    annotations = []
+    words = narration.split()
+    total_words = len(words)
+
+    # Find emphasis keywords
+    for ann_type, keywords in _ANNOTATION_KEYWORDS.items():
+        if len(annotations) >= 2:  # Max 2 annotations per scene
+            break
+
+        for i, word in enumerate(words):
+            if len(annotations) >= 2:
+                break
+
+            word_lower = word.lower().strip(".,;:!?")
+            if word_lower in keywords:
+                # Convert word position to frame timing
+                word_ratio = i / total_words
+                start_frame = int(word_ratio * duration_frames * 0.8) + 15
+                start_frame = min(start_frame, duration_frames - 30)
+
+                annotations.append({
+                    "type": ann_type,
+                    "target": word,
+                    "startFrame": start_frame,
+                    "duration": 20,
+                    "color": None,  # Use default (amber)
+                })
+                break  # One per type
+
+    return annotations
+
+
 def _scene_to_remotion(
     scene: Dict[str, Any],
     is_first: bool,
@@ -181,12 +283,16 @@ def _scene_to_remotion(
     duration_s = max(1.5, duration_s)
     duration_frames = math.ceil(duration_s * FPS)
 
+    # Extract annotations (manual or auto-generated)
+    annotations = _extract_annotations(scene, duration_frames)
+
     return {
         "scene_id": scene_id,
         "template": template,
         "narration": scene.get("narration", ""),
         "fields": fields,
         "durationInFrames": duration_frames,
+        "annotations": annotations,
     }
 
 

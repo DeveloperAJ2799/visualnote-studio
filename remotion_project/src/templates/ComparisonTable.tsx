@@ -3,102 +3,144 @@ import {
   AbsoluteFill,
   useCurrentFrame,
   useVideoConfig,
+  spring,
   interpolate,
 } from "remotion";
-import { theme } from "../theme";
+import { theme, springConfig, typography } from "../theme";
+import { ChalkBackground } from "../components/ChalkBackground";
+import { ConceptAnnotation } from "../components/ConceptAnnotation";
 import type { ComparisonTableProps } from "../types";
 
+/**
+ * ComparisonTable - IGWANI comparison template.
+ *
+ * Clean table layout with columns and rows.
+ * Spring entrance per row, staggered.
+ */
 export const ComparisonTable: React.FC<ComparisonTableProps> = ({
   columns,
   rows,
+  annotations = [],
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const headerOpacity = interpolate(frame, [0, 0.4 * fps], [0, 1], {
+  const headerScale = spring({
+    frame,
+    fps,
+    config: springConfig,
+  });
+
+  const headerOpacity = interpolate(frame, [0, 12], [0, 1], {
     extrapolateRight: "clamp",
   });
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: theme.bg,
-        padding: theme.padding,
-        fontFamily: theme.fontFamily,
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-      }}
-    >
-      <div
+    <ChalkBackground>
+      <AbsoluteFill
         style={{
+          padding: theme.padding,
           display: "flex",
-          gap: 4,
-          marginBottom: 4,
-          opacity: headerOpacity,
+          flexDirection: "column",
+          justifyContent: "center",
         }}
       >
-        {columns.map((col, i) => (
+        {/* Table */}
+        <div
+          style={{
+            opacity: headerOpacity,
+            transform: `scale(${headerScale})`,
+            transformOrigin: "left center",
+          }}
+        >
+          {/* Header row */}
           <div
-            key={i}
-            style={{
-              flex: 1,
-              backgroundColor: theme.accent,
-              color: theme.bg,
-              padding: "20px 24px",
-              fontSize: 28,
-              fontWeight: 700,
-              textAlign: "center",
-              borderRadius: i === 0 ? "12px 0 0 0" : i === columns.length - 1 ? "0 12px 0 0" : 0,
-            }}
-          >
-            {col}
-          </div>
-        ))}
-      </div>
-      {rows.map((row, ri) => {
-        const rowDelay = 0.3 * fps + ri * 0.15 * fps;
-        const rowOpacity = interpolate(
-          frame,
-          [rowDelay, rowDelay + 0.3 * fps],
-          [0, 1],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-        );
-        return (
-          <div
-            key={ri}
             style={{
               display: "flex",
-              gap: 4,
-              marginBottom: 4,
-              opacity: rowOpacity,
+              borderBottom: `2px solid ${theme.accentAmber}`,
+              paddingBottom: 16,
+              marginBottom: 24,
             }}
           >
-            {row.map((cell, ci) => (
+            {columns.map((col, i) => (
               <div
-                key={ci}
+                key={i}
                 style={{
                   flex: 1,
-                  backgroundColor:
-                    ri % 2 === 0 ? theme.bgLight : "rgba(255,255,255,0.05)",
-                  color: ci === 0 ? theme.text : theme.text,
-                  padding: "18px 24px",
-                  fontSize: 26,
-                  textAlign: "center",
-                  borderRadius:
-                    ri === rows.length - 1 && ci === 0
-                      ? "0 0 0 12px"
-                      : ri === rows.length - 1 && ci === row.length - 1
-                      ? "0 0 12px 0"
-                      : 0,
+                  fontSize: typography.bodyL,
+                  fontFamily: theme.fontFamilyDisplay,
+                  color: theme.accentAmber,
+                  fontWeight: 600,
                 }}
               >
-                {cell}
+                {col}
               </div>
             ))}
           </div>
-        );
-      })}
-    </AbsoluteFill>
+
+          {/* Data rows */}
+          {rows.map((row, rowIdx) => {
+            const rowDelay = 20 + rowIdx * 12;
+            const rowScale = spring({
+              frame: frame - rowDelay,
+              fps,
+              config: springConfig,
+            });
+
+            const rowOpacity = interpolate(
+              frame,
+              [rowDelay, rowDelay + 10],
+              [0, 1],
+              {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+              }
+            );
+
+            return (
+              <div
+                key={rowIdx}
+                style={{
+                  opacity: rowOpacity,
+                  transform: `scale(${rowScale})`,
+                  transformOrigin: "left center",
+                  display: "flex",
+                  borderBottom: `1px solid ${theme.chalkDim}30`,
+                  padding: "16px 0",
+                }}
+              >
+                {row.map((cell, cellIdx) => (
+                  <div
+                    key={cellIdx}
+                    style={{
+                      flex: 1,
+                      fontSize: typography.bodyM,
+                      fontFamily: theme.fontFamilyBody,
+                      color: theme.chalkWhite,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {cell}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+
+        {annotations.map((annotation, i) => (
+          <ConceptAnnotation
+            key={i}
+            type={annotation.type}
+            x={400}
+            y={400}
+            width={200}
+            height={100}
+            startFrame={annotation.startFrame}
+            color={annotation.color}
+          />
+        ))}
+      </AbsoluteFill>
+    </ChalkBackground>
   );
 };

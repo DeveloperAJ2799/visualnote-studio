@@ -29,3 +29,10 @@ env/
 .vscode/
 *.swp
 .DS_Store
+
+# Dependencies
+node_modules/
+
+# Temp outputs
+my-video/
+*.mp4
